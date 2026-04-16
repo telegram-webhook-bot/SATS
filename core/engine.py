@@ -550,6 +550,13 @@ class SATSEngine:
         # ── 計算訊號分數 ──────────────────────────
         signal: Optional[SignalResult] = None
 
+        # ── 命中檢測 ──────────────────────────────
+        # 修正：必須先執行命中檢測（關倉），才能判斷是否有新訊號。
+        # 否則在同一根 K 棒關倉時，新訊號會因為 trade_dir 還不是 0 而被過濾。
+        self._trade_events: list = []   # 清空事件列表（每根 K 棒）
+        if self._trade_dir != 0 and is_closed and bi > self._trade_entry_bar:
+            self._check_hits(high, low, bi)
+
         if confirmed_flip_up or confirmed_flip_down:
             is_buy = confirmed_flip_up
             score = self._calc_score(is_buy, close, er, vol_z, rsi, fc)
@@ -609,11 +616,6 @@ class SATSEngine:
                 dyn_scale = dyn_scale,
                 bar_index = bi,
             )
-
-        # ── 命中檢測 ──────────────────────────────
-        self._trade_events: list = []   # 清空事件列表（每根 K 棒）
-        if self._trade_dir != 0 and is_closed and bi > self._trade_entry_bar:
-            self._check_hits(high, low, bi)
 
         self._bar_index += 1
         return signal
