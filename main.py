@@ -726,6 +726,15 @@ class SATSBot:
             stat.record_signal(sig, sent=False)
             return
 
+        # ── 持倉檢查：若已有持倉則過濾掉新訊號 ──────────
+        if engine.position is not None:
+            logger.info(
+                f"⚠️ [{symbol}] {sig.direction} 訊號已過濾 "
+                f"（目前已有 {engine.position['direction']} 持倉中）"
+            )
+            stat.signals_skipped += 1
+            return
+
         # 發送 Discord
         logger.info(
             f"🔔 [{symbol}] {sig.direction}  "
