@@ -71,6 +71,7 @@ risk:
   tp1_r: 1.0
   tp2_r: 2.0
   tp3_r: 3.0
+  breakeven: true          # 當觸及 TP1 時，自動將止損移至進場價
 
 # ── Dynamic TP ────────────────────────────────────
 dynamic_tp:

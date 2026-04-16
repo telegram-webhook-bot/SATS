@@ -104,6 +104,14 @@ def build_tp_hit_embed(evt: dict, symbol: str, interval: str) -> dict:
         ("⬜")
     )
 
+    # ── Breakeven 提示 ─────────────────────
+    sl_val = evt["sl"]
+    is_be  = evt.get("is_breakeven", False)
+    sl_str = f"`{sl_val:.6g}`"
+    if tp_num == 1 and is_be:
+        sl_str = f"🛡️ `{entry:.6g}` (已保本)"
+    # ──────────────────────────────────────
+
     return {
         "title":       f"🏆  TP{tp_num} 命中  •  {symbol}  •  {interval}",
         "description": f"{emoji} **{evt['direction']}**  |  TP{tp_num} 已達到！",
@@ -112,7 +120,7 @@ def build_tp_hit_embed(evt: dict, symbol: str, interval: str) -> dict:
             {"name": "📍 進場價",      "value": f"`{entry:.6g}`",                            "inline": True},
             {"name": f"🎯 TP{tp_num}", "value": f"`{exit_p:.6g}`",                           "inline": True},
             {"name": "📈 浮盈",        "value": f"`{pnl_sign}{pnl_pct:.2f}%`",               "inline": True},
-            {"name": "🛡️ 止損",       "value": f"`{evt['sl']:.6g}`",                        "inline": True},
+            {"name": "🛡️ 止損",       "value": sl_str,                                      "inline": True},
             {"name": "已命中 TP",      "value": hit_icons,                                   "inline": True},
             {"name": "開倉根數",       "value": f"`{evt['bars_open']}`",                     "inline": True},
         ],
