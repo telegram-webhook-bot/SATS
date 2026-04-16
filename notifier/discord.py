@@ -99,8 +99,8 @@ def build_tp_hit_embed(evt: dict, symbol: str, interval: str) -> dict:
     pnl_sign  = "+" if pnl_pct >= 0 else ""
 
     hit_icons = (
-        ("✅" if evt["hit_tp1"] else "⬜") +
-        ("✅" if evt["hit_tp2"] else "⬜") +
+        ("✅" if evt.get("hit_tp1") else "⬜") +
+        ("✅" if evt.get("hit_tp2") else "⬜") +
         ("⬜")
     )
 
@@ -158,9 +158,9 @@ def build_close_embed(evt: dict, symbol: str, interval: str,
     pnl_emoji = "📈" if is_win else "📉"
 
     hit_icons = (
-        ("✅" if evt["hit_tp1"] else "⬜") +
-        ("✅" if evt["hit_tp2"] else "⬜") +
-        ("✅" if evt["hit_tp3"] else "⬜")
+        ("✅" if evt.get("hit_tp1") else "⬜") +
+        ("✅" if evt.get("hit_tp2") else "⬜") +
+        ("✅" if evt.get("hit_tp3") else "⬜")
     )
 
     wr_str = f"  勝率 `{win_rate:.0f}%`" if win_rate is not None else ""
