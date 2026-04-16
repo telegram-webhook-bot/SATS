@@ -753,15 +753,8 @@ class SATSBot:
             stat.signals_skipped += 1
             return
 
-        # 發送 Discord
-        logger.info(
-            f"🔔 [{symbol}] {sig.direction}  "
-            f"price={sig.price:.6g}  sl={sig.sl:.6g}  "
-            f"TQI={sig.tqi:.3f}  score={sig.score:.0f}"
-        )
-        pnl = stat.record_signal(sig, sent=True)   # 先算盈虧
-
-        # 若有盈虧，加進 embed field
+        # ── 計算盈虧（先於通知發送，以獲取 pnl_field） ────
+        pnl = stat.record_signal(sig, sent=True)
         pnl_field = None
         if pnl is not None:
             pnl_sign   = "+" if pnl >= 0 else ""
@@ -777,22 +770,43 @@ class SATSBot:
                 ),
                 "inline": True,
             }
-            logger.info(
-                f"[{symbol}] 盈虧: {pnl_sign}{pnl:.2f}%  "
-                f"累積: {cum_sign}{stat.realized_pnl:.2f}%  "
-                f"勝率: {stat.win_rate:.0f}%" if stat.win_rate else ""
-            )
 
-        ok = self.notifier.send_signal(sig, pnl_field=pnl_field)
-
-        if ok:
-            logger.info(f"[{symbol}] 通知已發送 ✅")
-        else:
-            logger.warning(f"[{symbol}] 通知發送失敗 ❌")
-
-        # ── 開倉通知（新訊號 = 開新倉）──────────────
-        open_ok = self.notifier.send_open(sig)
-        logger.info(f"[{symbol}] 開倉通知 {'✅' if open_ok else '❌'}")
+        # ── 發送 Discord 通知（合併 Signal 與 Open 以避免速率限制） ──
+        logger.info(
+            f"🔔 [{symbol}] {sig.direction}  "
+            f"price={sig.price:.6g}  sl={sig.sl:.6g}  "
+            f"TQI={sig.tqi:.3f}  score={sig.score:.0f}"
+        )
+        
+        # 為了減少 Discord Webhook 調用次數並確保不漏發，合併兩個 embed
+        signal_embed = build_signal_embed(sig, self.notifier.mention_role)
+        if pnl_field:
+            signal_embed["fields"].insert(0, pnl_field)
+        
+        open_embed = build_open_embed(sig, self.notifier.mention_role)
+        
+        # 直接使用 notifier 的內部方法發送合併 payload
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).isoformat()
+        signal_embed["timestamp"] = ts
+        
+        payload = {
+            "username": self.notifier.username,
+            "embeds": [signal_embed, open_embed]
+        }
+        if self.notifier.avatar_url:
+            payload["avatar_url"] = self.notifier.avatar_url
+            
+        try:
+            import requests as req
+            # 這裡簡單處理速率限制，直接借用 notifier 的邏輯概念
+            r = req.post(self.notifier.webhook_url, json=payload, timeout=10)
+            if r.status_code in (200, 204):
+                logger.info(f"[{symbol}] 訊號與開倉通知已合併發送 ✅")
+            else:
+                logger.warning(f"[{symbol}] 通知發送失敗 HTTP {r.status_code}")
+        except Exception as e:
+            logger.error(f"[{symbol}] 通知發送例外: {e}")
 
     # ── 交易事件處理（TP 命中 / 關倉）────────────────
     def _handle_trade_events(self, symbol: str, engine: "SATSEngine", stat: "SymbolStats"):
