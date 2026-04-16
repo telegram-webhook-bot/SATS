@@ -762,7 +762,7 @@ class SATSEngine:
             "tp1r"      : self._trade_tp1r,
             "tp2r"      : self._trade_tp2r,
             "tp3r"      : self._trade_tp3r,
-            "bars_open" : trade_age,
+            "bars_open" : trade_age + 1,
         }
 
         # TP 命中里程碑（只在首次命中時發事件）
@@ -876,5 +876,5 @@ class SATSEngine:
             "hit_tp1"   : self._hit_tp1,
             "hit_tp2"   : self._hit_tp2,
             "hit_tp3"   : self._hit_tp3,
-            "bars_open" : self._bar_index - self._trade_entry_bar,
+            "bars_open" : self._bar_index - self._trade_entry_bar + 1,
         }
