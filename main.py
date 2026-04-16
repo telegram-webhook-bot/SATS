@@ -717,20 +717,20 @@ class SATSBot:
         if sig is None:
             return   # 無翻轉訊號
 
-        # 分數過濾
-        if sig.score < self.min_score:
-            logger.info(
-                f"[{symbol}] {sig.direction} 跳過"
-                f"（分數 {sig.score:.0f} < {self.min_score}）"
-            )
-            stat.record_signal(sig, sent=False)
-            return
-
         # ── 持倉檢查：若已有持倉則過濾掉新訊號 ──────────
         if engine.position is not None:
             logger.info(
                 f"⚠️ [{symbol}] {sig.direction} 訊號已過濾 "
                 f"（目前已有 {engine.position['direction']} 持倉中）"
+            )
+            stat.signals_skipped += 1
+            return
+
+        # 分數過濾
+        if sig.score < self.min_score:
+            logger.info(
+                f"[{symbol}] {sig.direction} 跳過"
+                f"（分數 {sig.score:.0f} < {self.min_score}）"
             )
             stat.signals_skipped += 1
             return
