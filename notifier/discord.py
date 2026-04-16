@@ -17,11 +17,34 @@ COLOR_SELL   = 0xFF5252   # 紅
 COLOR_INFO   = 0x2196F3   # 藍
 COLOR_WARN   = 0xFFEB3B   # 黃
 
-
 COLOR_CLOSE_WIN  = 0x00E676   # 綠（獲利關倉）
 COLOR_CLOSE_LOSS = 0xFF5252   # 紅（虧損關倉）
 COLOR_TP_HIT     = 0xFFD600   # 金黃（TP 命中里程碑）
 COLOR_OPEN       = 0x29B6F6   # 天藍（開倉確認）
+
+
+# ══════════════════════════════════════════════════
+# 工具函數  ← 必須在所有 build_*embed 之前定義
+# ══════════════════════════════════════════════════
+def _tqi_bar(tqi: float, width: int = 8) -> str:
+    filled = round(tqi * width)
+    return "█" * filled + "░" * (width - filled)
+
+
+def _regime_label(er: float) -> str:
+    if er >= 0.50:
+        return "📈 Trending"
+    elif er >= 0.25:
+        return "〰️ Mixed"
+    return "🌀 Choppy"
+
+
+def _vol_label(vol_z: float) -> str:
+    if vol_z > 2.0:
+        return "🔥 High"
+    elif vol_z > 0.5:
+        return "✅ Normal"
+    return "😴 Low"
 
 
 # ══════════════════════════════════════════════════
@@ -86,12 +109,12 @@ def build_tp_hit_embed(evt: dict, symbol: str, interval: str) -> dict:
         "description": f"{emoji} **{evt['direction']}**  |  TP{tp_num} 已達到！",
         "color":       COLOR_TP_HIT,
         "fields": [
-            {"name": "📍 進場價",  "value": f"`{entry:.6g}`",                                "inline": True},
+            {"name": "📍 進場價",      "value": f"`{entry:.6g}`",                            "inline": True},
             {"name": f"🎯 TP{tp_num}", "value": f"`{exit_p:.6g}`",                           "inline": True},
-            {"name": "📈 浮盈",    "value": f"`{pnl_sign}{pnl_pct:.2f}%`",                   "inline": True},
-            {"name": "🛡️ 止損",   "value": f"`{evt['sl']:.6g}`",                            "inline": True},
-            {"name": "已命中 TP",  "value": hit_icons,                                       "inline": True},
-            {"name": "開倉根數",   "value": f"`{evt['bars_open']}`",                         "inline": True},
+            {"name": "📈 浮盈",        "value": f"`{pnl_sign}{pnl_pct:.2f}%`",               "inline": True},
+            {"name": "🛡️ 止損",       "value": f"`{evt['sl']:.6g}`",                        "inline": True},
+            {"name": "已命中 TP",      "value": hit_icons,                                   "inline": True},
+            {"name": "開倉根數",       "value": f"`{evt['bars_open']}`",                     "inline": True},
         ],
         "footer":    {"text": "SATS v1.9.0  •  倉位持續，等待 TP3 或止損"},
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -109,7 +132,7 @@ _CLOSE_TYPE_LABEL = {
 
 def build_close_embed(evt: dict, symbol: str, interval: str,
                       realized_pnl: float, trade_count: int,
-                      win_rate: "Optional[float]" = None) -> dict:  # noqa: F821
+                      win_rate: "Optional[float]" = None) -> dict:
     """TP3 / SL / Timeout 關倉通知。"""
     from datetime import datetime, timezone
     close_type = evt["type"]
@@ -139,12 +162,12 @@ def build_close_embed(evt: dict, symbol: str, interval: str,
         "description": f"{d_emoji} **{evt['direction']}**  |  {subtitle}",
         "color":       color,
         "fields": [
-            {"name": "📍 進場價",    "value": f"`{entry:.6g}`",                              "inline": True},
-            {"name": "🚪 出場價",    "value": f"`{exit_p:.6g}`",                             "inline": True},
-            {"name": f"{pnl_emoji} 盈虧", "value": f"`{pnl_sign}{pnl:.2f}%`",              "inline": True},
-            {"name": "🛡️ 止損",     "value": f"`{evt['sl']:.6g}`",                         "inline": True},
-            {"name": "TP 命中",      "value": hit_icons,                                    "inline": True},
-            {"name": "開倉根數",     "value": f"`{evt['bars_open']}`",                      "inline": True},
+            {"name": "📍 進場價",         "value": f"`{entry:.6g}`",                         "inline": True},
+            {"name": "🚪 出場價",         "value": f"`{exit_p:.6g}`",                        "inline": True},
+            {"name": f"{pnl_emoji} 盈虧", "value": f"`{pnl_sign}{pnl:.2f}%`",               "inline": True},
+            {"name": "🛡️ 止損",          "value": f"`{evt['sl']:.6g}`",                     "inline": True},
+            {"name": "TP 命中",           "value": hit_icons,                                "inline": True},
+            {"name": "開倉根數",          "value": f"`{evt['bars_open']}`",                  "inline": True},
             {
                 "name":   "📊 累積統計",
                 "value":  (
@@ -159,42 +182,22 @@ def build_close_embed(evt: dict, symbol: str, interval: str,
     }
 
 
-    filled = round(tqi * width)
-    return "█" * filled + "░" * (width - filled)
-
-
-def _regime_label(er: float) -> str:
-    if er >= 0.50:
-        return "📈 Trending"
-    elif er >= 0.25:
-        return "〰️ Mixed"
-    return "🌀 Choppy"
-
-
-def _vol_label(vol_z: float) -> str:
-    if vol_z > 2.0:
-        return "🔥 High"
-    elif vol_z > 0.5:
-        return "✅ Normal"
-    return "😴 Low"
-
-
+# ══════════════════════════════════════════════════
+# 訊號 Embed
+# ══════════════════════════════════════════════════
 def build_signal_embed(sig: SignalResult, mention_role: str = "") -> dict:
     is_buy = sig.direction == "BUY"
     color  = COLOR_BUY if is_buy else COLOR_SELL
     emoji  = "🟢" if is_buy else "🔴"
     direction_label = "BUY ▲" if is_buy else "SELL ▼"
 
-    tqi_pct = f"{sig.tqi * 100:.0f}%"
-    tqi_bar = _tqi_bar(sig.tqi)
+    tqi_pct   = f"{sig.tqi * 100:.0f}%"
+    tqi_bar   = _tqi_bar(sig.tqi)
     score_pct = f"{sig.score:.0f} / 102"
-    regime = _regime_label(sig.er)
-    vol_lbl = _vol_label(sig.vol_z)
+    regime    = _regime_label(sig.er)
+    vol_lbl   = _vol_label(sig.vol_z)
 
-    # TP Mode 標籤
     tp_mode_label = f"Dynamic ×{sig.dyn_scale:.2f}" if sig.tp_mode == "Dynamic" else "Fixed"
-
-    # 計算 Risk (pips/points)
     risk = abs(sig.price - sig.sl)
 
     description_lines = []
@@ -205,84 +208,33 @@ def build_signal_embed(sig: SignalResult, mention_role: str = "") -> dict:
     description = "\n".join(description_lines)
 
     embed = {
-        "title": f"{emoji}  SATS Signal  •  {sig.symbol}  •  {sig.interval}",
+        "title":       f"{emoji}  SATS Signal  •  {sig.symbol}  •  {sig.interval}",
         "description": description,
-        "color": color,
+        "color":       color,
         "fields": [
-            {
-                "name": "📍 Entry",
-                "value": f"`{sig.price:.6g}`",
-                "inline": True,
-            },
-            {
-                "name": "🛡️ Stop Loss",
-                "value": f"`{sig.sl:.6g}`  ({risk:.6g} risk)",
-                "inline": True,
-            },
-            {
-                "name": "\u200b",
-                "value": "\u200b",
-                "inline": True,
-            },
-            {
-                "name": "🎯 TP1",
-                "value": f"`{sig.tp1:.6g}`  ({sig.tp1_r:.1f}R)",
-                "inline": True,
-            },
-            {
-                "name": "🎯 TP2",
-                "value": f"`{sig.tp2:.6g}`  ({sig.tp2_r:.1f}R)",
-                "inline": True,
-            },
-            {
-                "name": "🎯 TP3",
-                "value": f"`{sig.tp3:.6g}`  ({sig.tp3_r:.1f}R)",
-                "inline": True,
-            },
-            {
-                "name": f"📐 TQI  {tqi_pct}",
-                "value": f"`{tqi_bar}`",
-                "inline": False,
-            },
-            {
-                "name": "📊 Score",
-                "value": score_pct,
-                "inline": True,
-            },
-            {
-                "name": "📡 Regime",
-                "value": regime,
-                "inline": True,
-            },
-            {
-                "name": "📦 Volume",
-                "value": vol_lbl + f"  (Z={sig.vol_z:.2f})",
-                "inline": True,
-            },
-            {
-                "name": "ER",
-                "value": f"`{sig.er:.3f}`",
-                "inline": True,
-            },
-            {
-                "name": "RSI",
-                "value": f"`{sig.rsi:.1f}`",
-                "inline": True,
-            },
-            {
-                "name": "Bar #",
-                "value": f"`{sig.bar_index}`",
-                "inline": True,
-            },
+            {"name": "📍 Entry",      "value": f"`{sig.price:.6g}`",                         "inline": True},
+            {"name": "🛡️ Stop Loss", "value": f"`{sig.sl:.6g}`  ({risk:.6g} risk)",          "inline": True},
+            {"name": "\u200b",        "value": "\u200b",                                      "inline": True},
+            {"name": "🎯 TP1",        "value": f"`{sig.tp1:.6g}`  ({sig.tp1_r:.1f}R)",       "inline": True},
+            {"name": "🎯 TP2",        "value": f"`{sig.tp2:.6g}`  ({sig.tp2_r:.1f}R)",       "inline": True},
+            {"name": "🎯 TP3",        "value": f"`{sig.tp3:.6g}`  ({sig.tp3_r:.1f}R)",       "inline": True},
+            {"name": f"📐 TQI  {tqi_pct}", "value": f"`{tqi_bar}`",                          "inline": False},
+            {"name": "📊 Score",      "value": score_pct,                                    "inline": True},
+            {"name": "📡 Regime",     "value": regime,                                       "inline": True},
+            {"name": "📦 Volume",     "value": vol_lbl + f"  (Z={sig.vol_z:.2f})",           "inline": True},
+            {"name": "ER",            "value": f"`{sig.er:.3f}`",                            "inline": True},
+            {"name": "RSI",           "value": f"`{sig.rsi:.1f}`",                           "inline": True},
+            {"name": "Bar #",         "value": f"`{sig.bar_index}`",                         "inline": True},
         ],
-        "footer": {
-            "text": "SATS v1.9.0  •  WillyAlgoTrader (Python port)",
-        },
+        "footer":    {"text": "SATS v1.9.0  •  WillyAlgoTrader (Python port)"},
         "timestamp": None,  # 由呼叫端填入 ISO 時間
     }
     return embed
 
 
+# ══════════════════════════════════════════════════
+# 通知器
+# ══════════════════════════════════════════════════
 class DiscordNotifier:
     def __init__(self, webhook_url: str, username: str = "SATS Bot 🤖",
                  avatar_url: str = "", mention_role: str = ""):
@@ -295,7 +247,7 @@ class DiscordNotifier:
 
     def send_signal(self, sig: SignalResult, pnl_field: Optional[dict] = None) -> bool:
         """發送訊號通知。若有 pnl_field 則插入 embed 頂部。成功回傳 True。"""
-        now = time.time()
+        now  = time.time()
         wait = self._rate_limit_delay - (now - self._last_sent)
         if wait > 0:
             time.sleep(wait)
@@ -306,14 +258,10 @@ class DiscordNotifier:
         embed = build_signal_embed(sig, self.mention_role)
         embed["timestamp"] = ts
 
-        # 盈虧欄位插入 fields 最前面（最顯眼）
         if pnl_field is not None:
             embed["fields"].insert(0, pnl_field)
 
-        payload = {
-            "username": self.username,
-            "embeds": [embed],
-        }
+        payload = {"username": self.username, "embeds": [embed]}
         if self.avatar_url:
             payload["avatar_url"] = self.avatar_url
 
@@ -322,16 +270,14 @@ class DiscordNotifier:
             self._last_sent = time.time()
             if r.status_code in (200, 204):
                 return True
-            else:
-                print(f"[Discord] 發送失敗 HTTP {r.status_code}: {r.text[:200]}")
-                return False
+            print(f"[Discord] 發送失敗 HTTP {r.status_code}: {r.text[:200]}")
+            return False
         except Exception as e:
             print(f"[Discord] 發送例外: {e}")
             return False
 
     def send_open(self, sig: SignalResult) -> bool:
         """發送開倉確認通知。"""
-        from datetime import datetime, timezone
         embed = build_open_embed(sig, self.mention_role)
         return self._post_embed(embed)
 
@@ -346,6 +292,51 @@ class DiscordNotifier:
         """發送關倉（TP3 / SL / Timeout）通知。"""
         embed = build_close_embed(evt, symbol, interval, realized_pnl, trade_count, win_rate)
         return self._post_embed(embed)
+
+    def send_info(self, title: str, message: str) -> bool:
+        """發送一般資訊訊息。"""
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).isoformat()
+        payload = {
+            "username": self.username,
+            "embeds": [{
+                "title":       title,
+                "description": message,
+                "color":       COLOR_INFO,
+                "timestamp":   ts,
+                "footer":      {"text": "SATS Bot"},
+            }],
+        }
+        if self.avatar_url:
+            payload["avatar_url"] = self.avatar_url
+        try:
+            r = requests.post(self.webhook_url, json=payload, timeout=10)
+            return r.status_code in (200, 204)
+        except Exception as e:
+            print(f"[Discord] send_info 例外: {e}")
+            return False
+
+    def send_error(self, title: str, message: str) -> bool:
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).isoformat()
+        payload = {
+            "username": self.username,
+            "embeds": [{
+                "title":       f"⚠️ {title}",
+                "description": message,
+                "color":       COLOR_WARN,
+                "timestamp":   ts,
+                "footer":      {"text": "SATS Bot"},
+            }],
+        }
+        if self.avatar_url:
+            payload["avatar_url"] = self.avatar_url
+        try:
+            r = requests.post(self.webhook_url, json=payload, timeout=10)
+            return r.status_code in (200, 204)
+        except Exception as e:
+            print(f"[Discord] send_error 例外: {e}")
+            return False
 
     def _post_embed(self, embed: dict) -> bool:
         """內部：直接 POST 一個 embed，帶速率限制。"""
@@ -365,49 +356,4 @@ class DiscordNotifier:
             return False
         except Exception as e:
             print(f"[Discord] _post_embed 例外: {e}")
-            return False
-
-
-        """發送一般資訊訊息。"""
-        from datetime import datetime, timezone
-        ts = datetime.now(timezone.utc).isoformat()
-        payload = {
-            "username": self.username,
-            "embeds": [{
-                "title": title,
-                "description": message,
-                "color": COLOR_INFO,
-                "timestamp": ts,
-                "footer": {"text": "SATS Bot"},
-            }],
-        }
-        if self.avatar_url:
-            payload["avatar_url"] = self.avatar_url
-        try:
-            r = requests.post(self.webhook_url, json=payload, timeout=10)
-            return r.status_code in (200, 204)
-        except Exception as e:
-            print(f"[Discord] send_info 例外: {e}")
-            return False
-
-    def send_error(self, title: str, message: str) -> bool:
-        from datetime import datetime, timezone
-        ts = datetime.now(timezone.utc).isoformat()
-        payload = {
-            "username": self.username,
-            "embeds": [{
-                "title": f"⚠️ {title}",
-                "description": message,
-                "color": COLOR_WARN,
-                "timestamp": ts,
-                "footer": {"text": "SATS Bot"},
-            }],
-        }
-        if self.avatar_url:
-            payload["avatar_url"] = self.avatar_url
-        try:
-            r = requests.post(self.webhook_url, json=payload, timeout=10)
-            return r.status_code in (200, 204)
-        except Exception as e:
-            print(f"[Discord] send_error 例外: {e}")
             return False

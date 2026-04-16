@@ -574,20 +574,22 @@ class SATSEngine:
                 tp2 = entry - risk * live_tp2r
                 tp3 = entry - risk * live_tp3r
 
-            # 更新活躍交易
-            self._trade_dir       = 1 if is_buy else -1
-            self._trade_entry_bar = bi
-            self._trade_entry     = entry
-            self._trade_sl        = trade_sl
-            self._trade_tp1       = tp1
-            self._trade_tp2       = tp2
-            self._trade_tp3       = tp3
-            self._trade_tp1r      = live_tp1r
-            self._trade_tp2r      = live_tp2r
-            self._trade_tp3r      = live_tp3r
-            self._hit_tp1 = self._hit_tp2 = self._hit_tp3 = False
-            self._trade_closed = False
-            self._trade_events = []
+            # 更新活躍交易 (僅當分數達到最低標準，才在引擎內部視為開倉)
+            min_score = self.cfg["filters"].get("min_score", 0)
+            if score >= min_score:
+                self._trade_dir       = 1 if is_buy else -1
+                self._trade_entry_bar = bi
+                self._trade_entry     = entry
+                self._trade_sl        = trade_sl
+                self._trade_tp1       = tp1
+                self._trade_tp2       = tp2
+                self._trade_tp3       = tp3
+                self._trade_tp1r      = live_tp1r
+                self._trade_tp2r      = live_tp2r
+                self._trade_tp3r      = live_tp3r
+                self._hit_tp1 = self._hit_tp2 = self._hit_tp3 = False
+                self._trade_closed = False
+                self._trade_events = []
 
             signal = SignalResult(
                 direction = "BUY" if is_buy else "SELL",
