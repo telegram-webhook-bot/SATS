@@ -827,9 +827,10 @@ class SATSBot:
                 else:
                     pnl = (entry - exit_p) / entry * 100
 
+                # 修正：確保勝率計算反映的是「利潤是否大於 0」
                 stat.realized_pnl += pnl
                 stat.trade_count  += 1
-                if pnl > 0:
+                if pnl > 0.000001:  # 避免浮點數微小誤差
                     stat.win_count += 1
 
                 pnl_sign = "+" if pnl >= 0 else ""

@@ -792,14 +792,17 @@ class SATSEngine:
                 self._trade_sl = self._trade_tp1
             # ──────────────────────────────────────
 
-            # 同步更新 base 狀態
-            base["hit_tp1"] = self._hit_tp1
+            # 同步更新 base 狀態，確保後續關倉事件抓到最新的 SL
+            base["hit_tp2"] = True
             base["sl"]      = self._trade_sl
 
             evt = {**base, "type": "tp2_hit", "exit_price": self._trade_tp2,
                    "hit_tp1": self._hit_tp1, "hit_tp2": True, "hit_tp3": self._hit_tp3,
                    "is_breakeven": is_be}
             self._trade_events.append(evt)
+            
+            # 重新檢查止損位，因為 SL 剛剛被移到了 TP1
+            sl_hit = (low <= self._trade_sl) if td == 1 else (high >= self._trade_sl)
 
         # 關倉事件（TP3 / SL / Timeout，只取第一個發生的）
         if not getattr(self, "_trade_closed", False):
