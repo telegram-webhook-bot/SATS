@@ -750,8 +750,10 @@ class SATSEngine:
         tp3_reached = (high >= self._trade_tp3) if td == 1 else (low <= self._trade_tp3)
         sl_hit      = (low  <= self._trade_sl)  if td == 1 else (high >= self._trade_sl)
 
-        trade_age = bi - self._trade_entry_bar
-        timeout   = trade_age >= self.cfg["risk"].get("trade_timeout", 100)
+        # 修正：統一計算 bars_open。
+        # 如果是剛開倉那根 (bi == entry_bar)，bars_open = 1。
+        bars_open = bi - self._trade_entry_bar + 1
+        timeout   = bars_open > self.cfg["risk"].get("trade_timeout", 100)
 
         direction = "BUY" if td == 1 else "SELL"
         base = {
@@ -764,7 +766,7 @@ class SATSEngine:
             "tp1r"      : self._trade_tp1r,
             "tp2r"      : self._trade_tp2r,
             "tp3r"      : self._trade_tp3r,
-            "bars_open" : trade_age + 1,
+            "bars_open" : bars_open,
         }
 
         # TP 命中里程碑（只在首次命中時發事件）

@@ -781,26 +781,29 @@ class SATSBot:
         if pnl_field:
             signal_embed["fields"].insert(0, pnl_field)
         
-        open_embed = build_open_embed(sig, self.notifier.mention_role)
+        # 判斷是否需要開倉通知 (只有當引擎真的開倉時才發送)
+        embeds = [signal_embed]
+        if engine.position is not None:
+            open_embed = build_open_embed(sig, self.notifier.mention_role)
+            embeds.append(open_embed)
         
-        # 直接使用 notifier 的內部方法發送合併 payload
         from datetime import datetime, timezone
         ts = datetime.now(timezone.utc).isoformat()
-        signal_embed["timestamp"] = ts
-        
+        for em in embeds:
+            em["timestamp"] = ts
+            
         payload = {
             "username": self.notifier.username,
-            "embeds": [signal_embed, open_embed]
+            "embeds": embeds
         }
         if self.notifier.avatar_url:
             payload["avatar_url"] = self.notifier.avatar_url
             
         try:
             import requests as req
-            # 這裡簡單處理速率限制，直接借用 notifier 的邏輯概念
             r = req.post(self.notifier.webhook_url, json=payload, timeout=10)
             if r.status_code in (200, 204):
-                logger.info(f"[{symbol}] 訊號與開倉通知已合併發送 ✅")
+                logger.info(f"[{symbol}] 訊號與開倉通知已發送 (共 {len(embeds)} 個 Embed) ✅")
             else:
                 logger.warning(f"[{symbol}] 通知發送失敗 HTTP {r.status_code}")
         except Exception as e:
