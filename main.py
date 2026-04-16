@@ -737,20 +737,18 @@ class SATSBot:
 
         # ── 持倉檢查：若已有持倉則過濾掉新訊號 ──────────
         if engine.position is not None:
-            logger.info(
-                f"⚠️ [{symbol}] {sig.direction} 訊號已過濾 "
-                f"（目前已有 {engine.position['direction']} 持倉中）"
-            )
+            reason = f"目前已有 {engine.position['direction']} 持倉中"
+            logger.info(f"⚠️ [{symbol}] {sig.direction} 訊號已過濾 （{reason}）")
             stat.signals_skipped += 1
+            self.notifier.send_skipped_signal(sig, reason)
             return
 
         # 分數過濾
         if sig.score < self.min_score:
-            logger.info(
-                f"[{symbol}] {sig.direction} 跳過"
-                f"（分數 {sig.score:.0f} < {self.min_score}）"
-            )
+            reason = f"分數 {sig.score:.0f} < {self.min_score}"
+            logger.info(f"[{symbol}] {sig.direction} 跳過（{reason}）")
             stat.signals_skipped += 1
+            self.notifier.send_skipped_signal(sig, reason)
             return
 
         # ── 計算盈虧（先於通知發送，以獲取 pnl_field） ────

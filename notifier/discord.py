@@ -245,6 +245,32 @@ def build_signal_embed(sig: SignalResult, mention_role: str = "") -> dict:
 
 
 # ══════════════════════════════════════════════════
+# 訊號過濾（跳過）Embed
+# ══════════════════════════════════════════════════
+def build_skipped_embed(sig: "SignalResult", reason: str) -> dict:
+    """當訊號被過濾時發送的簡短通知。"""
+    from datetime import datetime, timezone
+    is_buy = sig.direction == "BUY"
+    emoji  = "🟢" if is_buy else "🔴"
+    
+    # 根據原因選擇圖示
+    reason_icon = "⚠️" if "持倉" in reason else "📉"
+    
+    return {
+        "title":       f"{reason_icon}  訊號過濾  •  {sig.symbol}  •  {sig.interval}",
+        "description": f"**{emoji} {sig.symbol} {sig.direction}**\n原因：`{reason}`",
+        "color":       COLOR_WARN,
+        "fields": [
+            {"name": "📍 價格",   "value": f"`{sig.price:.6g}`",         "inline": True},
+            {"name": "📊 分數",   "value": f"`{sig.score:.0f}`",         "inline": True},
+            {"name": "📐 TQI",    "value": f"`{sig.tqi*100:.0f}%`",      "inline": True},
+        ],
+        "footer":    {"text": "SATS v1.9.0  •  訊號已跳過"},
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# ══════════════════════════════════════════════════
 # 通知器
 # ══════════════════════════════════════════════════
 class DiscordNotifier:
@@ -349,6 +375,11 @@ class DiscordNotifier:
         except Exception as e:
             print(f"[Discord] send_error 例外: {e}")
             return False
+
+    def send_skipped_signal(self, sig: SignalResult, reason: str) -> bool:
+        """發送訊號過濾通知。"""
+        embed = build_skipped_embed(sig, reason)
+        return self._post_embed(embed)
 
     def _post_embed(self, embed: dict) -> bool:
         """內部：直接 POST 一個 embed，帶速率限制。"""
