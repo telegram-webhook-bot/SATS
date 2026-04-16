@@ -785,12 +785,20 @@ class SATSEngine:
 
         if tp2_reached and not self._hit_tp2:
             self._hit_tp2 = True
+
+            # ── TP2 鎖利邏輯 (Move SL to TP1) ──────
+            is_be = self.cfg["risk"].get("breakeven", False)
+            if is_be:
+                self._trade_sl = self._trade_tp1
+            # ──────────────────────────────────────
+
             # 同步更新 base 狀態
             base["hit_tp1"] = self._hit_tp1
             base["sl"]      = self._trade_sl
 
             evt = {**base, "type": "tp2_hit", "exit_price": self._trade_tp2,
-                   "hit_tp1": self._hit_tp1, "hit_tp2": True, "hit_tp3": self._hit_tp3}
+                   "hit_tp1": self._hit_tp1, "hit_tp2": True, "hit_tp3": self._hit_tp3,
+                   "is_breakeven": is_be}
             self._trade_events.append(evt)
 
         # 關倉事件（TP3 / SL / Timeout，只取第一個發生的）

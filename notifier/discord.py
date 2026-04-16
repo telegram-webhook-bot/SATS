@@ -108,8 +108,12 @@ def build_tp_hit_embed(evt: dict, symbol: str, interval: str) -> dict:
     sl_val = evt["sl"]
     is_be  = evt.get("is_breakeven", False)
     sl_str = f"`{sl_val:.6g}`"
-    if tp_num == 1 and is_be:
-        sl_str = f"🛡️ `{entry:.6g}` (已保本)"
+    if is_be:
+        if tp_num == 1:
+            sl_str = f"🛡️ `{entry:.6g}` (已保本)"
+        elif tp_num == 2:
+            tp1_val = evt.get("tp1", 0)
+            sl_str = f"🔒 `{tp1_val:.6g}` (鎖利 TP1)"
     # ──────────────────────────────────────
 
     return {
