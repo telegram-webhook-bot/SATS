@@ -177,6 +177,20 @@ class SymbolStats:
         self.last_tqi   = tqi
         self.last_trend = trend
 
+    def reset(self):
+        """重置所有統計與盈虧數據（用於預熱後清空）"""
+        self.signals_total   = 0
+        self.signals_buy     = 0
+        self.signals_sell    = 0
+        self.signals_skipped = 0
+        self.last_signal     = None
+        self.last_signal_time = None
+        self.last_entry_price = 0.0
+        self.last_entry_dir   = ""
+        self.realized_pnl     = 0.0
+        self.trade_count      = 0
+        self.win_count        = 0
+
 
 
 # ══════════════════════════════════════════════════
@@ -581,6 +595,10 @@ class SATSBot:
 
         # 預熱所有引擎
         warmup_results = self._warmup_all()
+
+        # ── 預熱後重置統計數據（確保歷史數據不計入盈虧） ──
+        for st in self.stats.values():
+            st.reset()
 
         # ── 啟動通知 ──────────────────────────────
         embed = build_startup_embed(
