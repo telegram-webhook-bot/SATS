@@ -739,10 +739,18 @@ class SATSBot:
         if sig is None:
             return   # 無翻轉訊號
 
-        # ── 持倉檢查：用 update() 呼叫「之前」的狀態判斷 ──
+        # ── 1. 分數過濾（優先）────────────────────────
+        # 分數不足直接 skip，不論持倉狀態，也不發 DC 通知
+        if sig.score < self.min_score:
+            reason = f"分數 {sig.score:.0f} < {self.min_score}"
+            logger.info(f"[{symbol}] {sig.direction} 跳過（{reason}）")
+            stat.signals_skipped += 1
+            return
+
+        # ── 2. 持倉檢查：用 update() 呼叫「之前」的狀態判斷 ──
         # ✅ 不能用 engine.position，那已是新訊號寫入後的狀態
         if had_position_before:
-            # 同方向：確實是重複訊號，過濾
+            # 同方向：確實是重複訊號，過濾（分數已足夠，才值得通知被過濾）
             if had_position_dir == sig.direction:
                 reason = f"目前已有 {had_position_dir} 持倉中"
                 logger.info(f"⚠️ [{symbol}] {sig.direction} 訊號已過濾 （{reason}）")
@@ -751,14 +759,6 @@ class SATSBot:
                 return
             # 反方向：ST 翻轉，舊倉已由 _check_hits 關閉（或將由 timeout 處理）
             # 允許繼續往下發出新訊號通知
-
-        # 分數過濾
-        if sig.score < self.min_score:
-            reason = f"分數 {sig.score:.0f} < {self.min_score}"
-            logger.info(f"[{symbol}] {sig.direction} 跳過（{reason}）")
-            stat.signals_skipped += 1
-            self.notifier.send_skipped_signal(sig, reason)
-            return
 
         # ── 計算盈虧（先於通知發送，以獲取 pnl_field） ────
         pnl = stat.record_signal(sig, sent=True)
