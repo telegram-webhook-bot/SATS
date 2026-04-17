@@ -9,6 +9,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
 import sys
+import shutil
 
 # 資料庫路徑
 DB_PATH = Path("sats_bot.db")
@@ -23,6 +24,107 @@ def get_db_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+def fix_database_structure():
+    """檢查並修復資料庫結構，自動新增缺失的欄位"""
+    if not DB_PATH.exists():
+        print(f"❌ 錯誤：找不到資料庫檔案 {DB_PATH}")
+        return False
+
+    # 自動備份
+    backup_path = f"{DB_PATH}.backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    try:
+        shutil.copy2(DB_PATH, backup_path)
+        print(f"💾 已建立備份：{backup_path}")
+    except Exception as e:
+        print(f"⚠️ 備份失敗：{e}")
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # 定義所有需要檢查的欄位
+    fixes = [
+        # signals 表
+        ("signals", "signal_type", "TEXT"),
+        ("signals", "entry_price", "REAL"),
+        ("signals", "score", "REAL"),
+        ("signals", "status", "TEXT DEFAULT 'ACTIVE'"),
+        ("signals", "created_at", "TIMESTAMP"),
+        
+        # trade_closes 表
+        ("trade_closes", "pnl", "REAL"),
+        ("trade_closes", "exit_price", "REAL"),
+        ("trade_closes", "pnl_percent", "REAL"),
+        ("trade_closes", "exit_reason", "TEXT"),
+        ("trade_closes", "closed_at", "TIMESTAMP"),
+        
+        # symbol_stats 表
+        ("symbol_stats", "winning_trades", "INTEGER DEFAULT 0"),
+        ("symbol_stats", "losing_trades", "INTEGER DEFAULT 0"),
+        ("symbol_stats", "win_rate", "REAL DEFAULT 0.0"),
+        ("symbol_stats", "total_pnl", "REAL DEFAULT 0.0"),
+        ("symbol_stats", "avg_pnl", "REAL DEFAULT 0.0"),
+        ("symbol_stats", "max_profit", "REAL DEFAULT 0.0"),
+        ("symbol_stats", "max_loss", "REAL DEFAULT 0.0"),
+        ("symbol_stats", "last_updated", "TIMESTAMP"),
+        
+        # tp_sl_events 表
+        ("tp_sl_events", "tp_level", "TEXT"),
+        ("tp_sl_events", "trigger_price", "REAL"),
+        ("tp_sl_events", "pnl_locked", "REAL"),
+        ("tp_sl_events", "triggered_at", "TIMESTAMP"),
+    ]
+
+    print("🔍 開始檢查並修復資料庫結構...\n")
+    
+    fixed_count = 0
+    for table, column, dtype in fixes:
+        try:
+            # 嘗試新增欄位
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {dtype}")
+            print(f"➕ 新增 {table}.{column} ({dtype})...")
+            
+            # 根據欄位類型更新舊數據
+            now = datetime.now().isoformat()
+            update_sql = None
+            if "TIMESTAMP" in dtype:
+                update_sql = f"UPDATE {table} SET {column} = ? WHERE {column} IS NULL"
+                params = (now,)
+            elif "DEFAULT 0" in dtype or "INTEGER" in dtype:
+                update_sql = f"UPDATE {table} SET {column} = 0 WHERE {column} IS NULL"
+                params = ()
+            elif "DEFAULT 0.0" in dtype or "REAL" in dtype:
+                update_sql = f"UPDATE {table} SET {column} = 0.0 WHERE {column} IS NULL"
+                params = ()
+            elif "DEFAULT 'ACTIVE'" in dtype:
+                update_sql = f"UPDATE {table} SET {column} = 'ACTIVE' WHERE {column} IS NULL"
+                params = ()
+            
+            if update_sql:
+                if params:
+                    cursor.execute(update_sql, params)
+                else:
+                    cursor.execute(update_sql)
+                print(f"   📝 已更新舊數據預設值")
+            
+            conn.commit()
+            fixed_count += 1
+            
+        except sqlite3.OperationalError as e:
+            if "duplicate column" in str(e).lower():
+                print(f"✓ {table}.{column} 已存在，跳過")
+            else:
+                print(f"⚠️ 錯誤 {table}.{column}: {e}")
+    
+    conn.close()
+    
+    print("\n" + "="*50)
+    if fixed_count > 0:
+        print(f"✅ 成功修復 {fixed_count} 個欄位！")
+    else:
+        print("✅ 資料庫結構已是最新，無需修復。")
+    print("="*50)
+    return True
 
 def view_symbol_stats():
     """查看所有幣種的統計數據"""
@@ -340,6 +442,7 @@ def show_menu():
     print("5. 生成績效報告")
     print("6. 匯出數據到 CSV")
     print("7. 自訂 SQL 查詢")
+    print("8. 修復資料庫結構")
     print("0. 退出")
     print("="*80)
 
@@ -372,7 +475,7 @@ def main():
     """主程式"""
     while True:
         show_menu()
-        choice = input("請選擇功能 (0-7): ").strip()
+        choice = input("請選擇功能 (0-8): ").strip()
         
         if choice == '1':
             view_symbol_stats()
@@ -406,6 +509,8 @@ def main():
             export_to_csv()
         elif choice == '7':
             custom_sql_query()
+        elif choice == '8':
+            fix_database_structure()
         elif choice == '0':
             print("👋 再見！")
             break
