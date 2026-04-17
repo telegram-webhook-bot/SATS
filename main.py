@@ -400,23 +400,25 @@ class HourlyReporter(threading.Thread):
         if self._stop.wait(30):
             return
         
-        logger.info("[HourlyReporter] 正在發送首次報告...")
-        try:
-            self._send_report()
-        except Exception as e:
-            logger.error(f"[HourlyReporter] 首次報告發送失敗: {e}")
-
-        # 計算距下一個整點（或設定間隔）的秒數
-        now = time.time()
-        wait = self.interval_sec - (now % self.interval_sec)
-        logger.info(f"[HourlyReporter] 下次報告將在 {wait/60:.1f} 分後發送")
-
-        while not self._stop.wait(wait):
+        while not self._stop.is_set():
+            logger.info("[HourlyReporter] 正在發送報告...")
             try:
                 self._send_report()
             except Exception as e:
-                logger.error(f"[HourlyReporter] 定期報告發送失敗: {e}")
-            wait = self.interval_sec
+                logger.error(f"[HourlyReporter] 報告發送失敗: {e}")
+
+            # 計算下次發送的等待時間（對齊間隔）
+            now = time.time()
+            wait_time = self.interval_sec - (now % self.interval_sec)
+            # 確保等待時間至少有 10 秒，避免極短間隔導致的無限循環
+            if wait_time < 10:
+                wait_time += self.interval_sec
+                
+            logger.info(f"[HourlyReporter] 報告發送完成。下次將在 {wait_time/60:.1f} 分後發送。")
+            
+            # 執行等待，若期間收到停止訊號則跳出
+            if self._stop.wait(wait_time):
+                break
 
     def _send_report(self):
         uptime = time.time() - self.start_time
