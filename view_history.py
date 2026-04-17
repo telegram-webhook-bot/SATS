@@ -235,7 +235,7 @@ def view_trade_history(symbol=None, limit=50):
                 tc.pnl_percent as pnl,
                 tc.pnl_percent,
                 tc.close_reason as exit_reason,
-                s.entry_timestamp as entry_time,
+                s.timestamp as entry_time,
                 tc.close_timestamp as exit_time
             FROM signals s
             JOIN trade_closes tc ON s.id = tc.signal_id
