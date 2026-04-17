@@ -42,23 +42,19 @@ def fix_database_structure():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # 定義所有需要檢查的欄位
+    # 定義所有需要檢查的欄位 (根據 core/database.py 的結構)
     fixes = [
-        # signals 表
+        # signals 表 - 檢查可能缺失的欄位
         ("signals", "signal_type", "TEXT"),
         ("signals", "entry_price", "REAL"),
-        ("signals", "score", "REAL"),
         ("signals", "status", "TEXT DEFAULT 'ACTIVE'"),
-        ("signals", "created_at", "TIMESTAMP"),
         
-        # trade_closes 表
-        ("trade_closes", "pnl", "REAL"),
-        ("trade_closes", "exit_price", "REAL"),
-        ("trade_closes", "pnl_percent", "REAL"),
+        # trade_closes 表 - 檢查可能缺失的欄位
         ("trade_closes", "exit_reason", "TEXT"),
         ("trade_closes", "closed_at", "TIMESTAMP"),
+        ("trade_closes", "pnl", "REAL"),
         
-        # symbol_stats 表
+        # symbol_stats 表 - 檢查可能缺失的欄位
         ("symbol_stats", "winning_trades", "INTEGER DEFAULT 0"),
         ("symbol_stats", "losing_trades", "INTEGER DEFAULT 0"),
         ("symbol_stats", "win_rate", "REAL DEFAULT 0.0"),
@@ -68,7 +64,7 @@ def fix_database_structure():
         ("symbol_stats", "max_loss", "REAL DEFAULT 0.0"),
         ("symbol_stats", "last_updated", "TIMESTAMP"),
         
-        # tp_sl_events 表
+        # tp_sl_events 表 - 檢查可能缺失的欄位
         ("tp_sl_events", "tp_level", "TEXT"),
         ("tp_sl_events", "trigger_price", "REAL"),
         ("tp_sl_events", "pnl_locked", "REAL"),
@@ -113,6 +109,8 @@ def fix_database_structure():
         except sqlite3.OperationalError as e:
             if "duplicate column" in str(e).lower():
                 print(f"✓ {table}.{column} 已存在，跳過")
+            elif "no such table" in str(e).lower():
+                print(f"⚠️ 表 {table} 不存在，跳過")
             else:
                 print(f"⚠️ 錯誤 {table}.{column}: {e}")
     
@@ -137,16 +135,16 @@ def view_symbol_stats():
         SELECT 
             symbol,
             total_trades,
-            winning_trades,
-            losing_trades,
-            win_rate,
-            total_pnl,
-            avg_pnl,
-            max_profit,
-            max_loss,
-            last_updated
+            win_trades as winning_trades,
+            (total_trades - win_trades) as losing_trades,
+            CASE WHEN total_trades > 0 THEN ROUND(CAST(win_trades AS REAL) / total_trades * 100, 2) ELSE 0.0 END as win_rate,
+            realized_pnl as total_pnl,
+            CASE WHEN total_trades > 0 THEN ROUND(realized_pnl / total_trades, 2) ELSE 0.0 END as avg_pnl,
+            0.0 as max_profit,
+            0.0 as max_loss,
+            updated_at as last_updated
         FROM symbol_stats
-        ORDER BY total_pnl DESC
+        ORDER BY realized_pnl DESC
     """
     
     df = pd.read_sql_query(query, conn)
@@ -175,13 +173,13 @@ def view_recent_signals(limit=20):
         SELECT 
             id,
             symbol,
-            signal_type,
-            entry_price,
+            direction as signal_type,
+            price as entry_price,
             score,
-            status,
-            created_at
+            CASE WHEN sent = 1 THEN 'SENT' ELSE 'SKIPPED' END as status,
+            timestamp as created_at
         FROM signals
-        ORDER BY created_at DESC
+        ORDER BY timestamp DESC
         LIMIT ?
     """
     
@@ -212,18 +210,18 @@ def view_trade_history(symbol=None, limit=50):
         query = """
             SELECT 
                 s.symbol,
-                s.signal_type,
-                s.entry_price,
+                s.direction as signal_type,
+                s.price as entry_price,
                 tc.exit_price,
-                tc.pnl,
+                tc.pnl_percent as pnl,
                 tc.pnl_percent,
-                tc.exit_reason,
-                s.created_at as entry_time,
-                tc.closed_at as exit_time
+                tc.close_reason as exit_reason,
+                s.entry_timestamp as entry_time,
+                tc.close_timestamp as exit_time
             FROM signals s
             JOIN trade_closes tc ON s.id = tc.signal_id
             WHERE s.symbol = ?
-            ORDER BY tc.closed_at DESC
+            ORDER BY tc.close_timestamp DESC
             LIMIT ?
         """
         df = pd.read_sql_query(query, conn, params=(symbol, limit))
@@ -231,17 +229,17 @@ def view_trade_history(symbol=None, limit=50):
         query = """
             SELECT 
                 s.symbol,
-                s.signal_type,
-                s.entry_price,
+                s.direction as signal_type,
+                s.price as entry_price,
                 tc.exit_price,
-                tc.pnl,
+                tc.pnl_percent as pnl,
                 tc.pnl_percent,
-                tc.exit_reason,
-                s.created_at as entry_time,
-                tc.closed_at as exit_time
+                tc.close_reason as exit_reason,
+                s.entry_timestamp as entry_time,
+                tc.close_timestamp as exit_time
             FROM signals s
             JOIN trade_closes tc ON s.id = tc.signal_id
-            ORDER BY tc.closed_at DESC
+            ORDER BY tc.close_timestamp DESC
             LIMIT ?
         """
         df = pd.read_sql_query(query, conn, params=(limit,))
@@ -273,13 +271,13 @@ def view_tp_sl_events(symbol=None, limit=30):
         query = """
             SELECT 
                 symbol,
-                tp_level,
-                trigger_price,
-                pnl_locked,
-                triggered_at
+                event_type as tp_level,
+                hit_price as trigger_price,
+                hit_r as pnl_locked,
+                timestamp as triggered_at
             FROM tp_sl_events
             WHERE symbol = ?
-            ORDER BY triggered_at DESC
+            ORDER BY timestamp DESC
             LIMIT ?
         """
         df = pd.read_sql_query(query, conn, params=(symbol, limit))
@@ -287,12 +285,12 @@ def view_tp_sl_events(symbol=None, limit=30):
         query = """
             SELECT 
                 symbol,
-                tp_level,
-                trigger_price,
-                pnl_locked,
-                triggered_at
+                event_type as tp_level,
+                hit_price as trigger_price,
+                hit_r as pnl_locked,
+                timestamp as triggered_at
             FROM tp_sl_events
-            ORDER BY triggered_at DESC
+            ORDER BY timestamp DESC
             LIMIT ?
         """
         df = pd.read_sql_query(query, conn, params=(limit,))
