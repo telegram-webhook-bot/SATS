@@ -858,6 +858,15 @@ class SATSBot:
                     f"勝率={stat.win_rate:.0f}%" if stat.win_rate else ""
                 )
 
+                # 更新資料庫統計
+                self.db.update_symbol_stats(
+                    symbol=symbol,
+                    interval=self.interval,
+                    trade_completed=True,
+                    is_win=(pnl > 0.000001),
+                    pnl=pnl
+                )
+
                 ok = self.notifier.send_close(
                     evt, symbol, self.interval,
                     realized_pnl = stat.realized_pnl,
