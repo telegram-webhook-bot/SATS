@@ -617,7 +617,8 @@ class SATSEngine:
                 bar_index = bi,
             )
 
-        self._bar_index += 1
+        if is_closed:
+            self._bar_index += 1
         return signal
 
     # ── 內部計算 ─────────────────────────────────
@@ -750,10 +751,10 @@ class SATSEngine:
         tp3_reached = (high >= self._trade_tp3) if td == 1 else (low <= self._trade_tp3)
         sl_hit      = (low  <= self._trade_sl)  if td == 1 else (high >= self._trade_sl)
 
-        # 修正：統一計算 bars_open。
-        # 如果是剛開倉那根 (bi == entry_bar)，bars_open = 1。
-        bars_open = bi - self._trade_entry_bar + 1
-        timeout   = bars_open > self.cfg["risk"].get("trade_timeout", 100)
+        # 修正：計算 bars_open（進場後經過的 K 棒數）。
+        # 開倉當根為 0。
+        bars_open = bi - self._trade_entry_bar
+        timeout   = bars_open >= self.cfg["risk"].get("trade_timeout", 100)
 
         direction = "BUY" if td == 1 else "SELL"
         base = {
@@ -883,5 +884,5 @@ class SATSEngine:
             "hit_tp1"   : self._hit_tp1,
             "hit_tp2"   : self._hit_tp2,
             "hit_tp3"   : self._hit_tp3,
-            "bars_open" : self._bar_index - self._trade_entry_bar + 1,
+            "bars_open" : self._bar_index - self._trade_entry_bar,
         }
