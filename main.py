@@ -393,15 +393,24 @@ class HourlyReporter(threading.Thread):
         self._stop.set()
 
     def run(self):
-        # 計算距下一個整點的秒數
+        # 啟動後先發送一次，確保用戶知道報告功能正常
+        logger.info("[HourlyReporter] 執行緒已啟動，正在發送首次報告...")
+        try:
+            self._send_report()
+        except Exception as e:
+            logger.error(f"[HourlyReporter] 首次報告發送失敗: {e}")
+
+        # 計算距下一個整點（或設定間隔）的秒數
         now = time.time()
-        secs_past_hour = now % self.interval_sec
-        wait = self.interval_sec - secs_past_hour
-        logger.info(f"[HourlyReporter] 首次報告將在 {wait/60:.1f} 分後發送")
+        wait = self.interval_sec - (now % self.interval_sec)
+        logger.info(f"[HourlyReporter] 下次報告將在 {wait/60:.1f} 分後發送")
 
         while not self._stop.wait(wait):
-            self._send_report()
-            wait = self.interval_sec   # 之後每 interval_sec 一次
+            try:
+                self._send_report()
+            except Exception as e:
+                logger.error(f"[HourlyReporter] 定期報告發送失敗: {e}")
+            wait = self.interval_sec
 
     def _send_report(self):
         uptime = time.time() - self.start_time
