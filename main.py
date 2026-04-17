@@ -357,7 +357,9 @@ def build_hourly_report(
     for sym in top_tqi:
         eng = engines[sym]
         te  = _trend_emoji(eng.trend)
-        lines.append(f"`{sym}` {te}  {_tqi_bar(eng.tqi)}  `{eng.tqi*100:.0f}%`  `{eng.last_close:.6g}`")
+        # 安全檢查：若 last_close 尚未定義，則顯示 N/A
+        price_str = f"{eng.last_close:.6g}" if hasattr(eng, "last_close") else "N/A"
+        lines.append(f"`{sym}` {te}  {_tqi_bar(eng.tqi)}  `{eng.tqi*100:.0f}%`  `{price_str}`")
     fields.append({
         "name":   "🔥 TQI Top 5",
         "value":  "\n".join(lines),
@@ -393,8 +395,12 @@ class HourlyReporter(threading.Thread):
         self._stop.set()
 
     def run(self):
-        # 啟動後先發送一次，確保用戶知道報告功能正常
-        logger.info("[HourlyReporter] 執行緒已啟動，正在發送首次報告...")
+        # 啟動後稍微延遲，確保預熱完成且數據初始化
+        logger.info("[HourlyReporter] 執行緒已啟動，等待 30 秒進行首次報告...")
+        if self._stop.wait(30):
+            return
+        
+        logger.info("[HourlyReporter] 正在發送首次報告...")
         try:
             self._send_report()
         except Exception as e:
