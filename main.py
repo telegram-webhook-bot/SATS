@@ -32,7 +32,7 @@ from core.engine      import SATSEngine, SignalResult
 from notifier.discord import (
     DiscordNotifier,
     COLOR_INFO, COLOR_WARN,
-    build_open_embed, build_tp_hit_embed, build_close_embed,
+    build_signal_embed, build_open_embed, build_tp_hit_embed, build_close_embed,
 )
 
 # 交易所模組在 load_config 後動態選擇（見 _load_exchange_module）
@@ -769,29 +769,29 @@ class SATSBot:
         )
         
         # 為了減少 Discord Webhook 調用次數並確保不漏發，合併兩個 embed
-        signal_embed = build_signal_embed(sig, self.notifier.mention_role)
-        if pnl_field:
-            signal_embed["fields"].insert(0, pnl_field)
-        
-        # 判斷是否需要開倉通知 (只有當引擎真的開倉時才發送)
-        embeds = [signal_embed]
-        if engine.position is not None:
-            open_embed = build_open_embed(sig, self.notifier.mention_role)
-            embeds.append(open_embed)
-        
-        from datetime import datetime, timezone
-        ts = datetime.now(timezone.utc).isoformat()
-        for em in embeds:
-            em["timestamp"] = ts
-            
-        payload = {
-            "username": self.notifier.username,
-            "embeds": embeds
-        }
-        if self.notifier.avatar_url:
-            payload["avatar_url"] = self.notifier.avatar_url
-            
         try:
+            signal_embed = build_signal_embed(sig, self.notifier.mention_role)
+            if pnl_field:
+                signal_embed["fields"].insert(0, pnl_field)
+            
+            # 判斷是否需要開倉通知 (只有當引擎真的開倉時才發送)
+            embeds = [signal_embed]
+            if engine.position is not None:
+                open_embed = build_open_embed(sig, self.notifier.mention_role)
+                embeds.append(open_embed)
+            
+            from datetime import datetime, timezone
+            ts = datetime.now(timezone.utc).isoformat()
+            for em in embeds:
+                em["timestamp"] = ts
+                
+            payload = {
+                "username": self.notifier.username,
+                "embeds": embeds
+            }
+            if self.notifier.avatar_url:
+                payload["avatar_url"] = self.notifier.avatar_url
+                
             import requests as req
             r = req.post(self.notifier.webhook_url, json=payload, timeout=10)
             if r.status_code in (200, 204):
@@ -799,7 +799,7 @@ class SATSBot:
             else:
                 logger.warning(f"[{symbol}] 通知發送失敗 HTTP {r.status_code}")
         except Exception as e:
-            logger.error(f"[{symbol}] 通知發送例外: {e}")
+            logger.error(f"[{symbol}] 通知發送過程發生錯誤: {e}", exc_info=True)
 
     # ── 交易事件處理（TP 命中 / 關倉）────────────────
     def _handle_trade_events(self, symbol: str, engine: "SATSEngine", stat: "SymbolStats"):
