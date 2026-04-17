@@ -760,7 +760,24 @@ class SATSBot:
             self.notifier.send_skipped_signal(sig, reason)
             return
 
-        # ... 以下發送通知邏輯不變
+        # ── 計算盈虧（先於通知發送，以獲取 pnl_field） ────
+        pnl = stat.record_signal(sig, sent=True)
+        pnl_field = None
+        if pnl is not None:
+            pnl_sign   = "+" if pnl >= 0 else ""
+            pnl_emoji  = "📈" if pnl >= 0 else "📉"
+            cum_sign   = "+" if stat.realized_pnl >= 0 else ""
+            pnl_field  = {
+                "name":   f"{pnl_emoji} 已實現盈虧",
+                "value":  (
+                    f"本次 `{pnl_sign}{pnl:.2f}%`\n"
+                    f"累積 `{cum_sign}{stat.realized_pnl:.2f}%`"
+                    f"  /  {stat.trade_count} 筆"
+                    + (f"  /  勝率 {stat.win_rate:.0f}%" if stat.win_rate is not None else "")
+                ),
+                "inline": True,
+            }
+
         # ── 發送 Discord 通知（合併 Signal 與 Open 以避免速率限制） ──
         logger.info(
             f"🔔 [{symbol}] {sig.direction}  "
