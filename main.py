@@ -881,7 +881,7 @@ class SATSBot:
                 self.db.update_symbol_stats(
                     symbol=symbol,
                     interval=self.interval,
-                    trade_completed=True,
+                    signal_sent=False,  # 這是平倉事件，不是新訊號
                     is_win=(pnl > 0.000001),
                     pnl=pnl
                 )
