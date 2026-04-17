@@ -127,35 +127,9 @@ class SymbolStats:
         self.trade_count:      int   = 0     # 完成交易次數（有進有出）
         self.win_count:        int   = 0     # 獲利次數
 
-    def record_signal(self, sig: SignalResult, sent: bool) -> Optional[float]:
-        """
-        記錄訊號；若方向翻轉，計算本次已實現盈虧並回傳（%）。
-        沒有翻轉或首次訊號時回傳 None。
-        """
-        pnl: Optional[float] = None
-
+    def record_signal(self, sig: SignalResult, sent: bool):
+        """記錄訊號。"""
         if sent:
-            # ── 計算盈虧（方向翻轉時）──────────────
-            if self.last_entry_price > 0 and self.last_entry_dir and \
-               self.last_entry_dir != sig.direction:
-                entry = self.last_entry_price
-                exit_ = sig.price
-                if self.last_entry_dir == "BUY":
-                    # 多單：(出場 - 進場) / 進場
-                    pnl = (exit_ - entry) / entry * 100
-                else:
-                    # 空單：(進場 - 出場) / 進場
-                    pnl = (entry - exit_) / entry * 100
-                self.realized_pnl += pnl
-                self.trade_count  += 1
-                if pnl > 0:
-                    self.win_count += 1
-
-            # ── 更新進場記錄 ───────────────────────
-            self.last_entry_price = sig.price
-            self.last_entry_dir   = sig.direction
-
-            # ── 一般統計 ───────────────────────────
             self.signals_total += 1
             if sig.direction == "BUY":
                 self.signals_buy += 1
@@ -165,8 +139,6 @@ class SymbolStats:
             self.last_signal_time = datetime.now(timezone.utc)
         else:
             self.signals_skipped += 1
-
-        return pnl
 
     @property
     def win_rate(self) -> Optional[float]:
@@ -348,35 +320,57 @@ def build_hourly_report(
             sig_e = "🟢" if st.last_signal.direction == "BUY" else "🔴"
             te    = _trend_emoji(engines[sym].trend)
             lines.append(
-                f"{sig_e} `{sym}` {te}  TQI `{engines[sym].tqi*100:.0f}%`"
-                f"  @ `{st.last_price:.5g}`  ({mins_ago}m 前)"
+                f"{sig_e} `{sym}` {te}  TQI `{engines[sym].tqi*100:.0f}%`  "
+                f"Score `{st.last_signal.score:.0f}`  ({mins_ago}m ago)"
             )
         fields.append({
-            "name":   "🔔 最近訊號",
+            "name":   "🕒 最近訊號",
             "value":  "\n".join(lines),
             "inline": False,
         })
 
-    # ── Field 3：TQI 最強 Top 5 ──────────────────
-    top5 = sorted(symbols, key=lambda s: engines[s].tqi, reverse=True)[:5]
-    top5_lines = [
-        f"`{s}` {_trend_emoji(engines[s].trend)} `{_tqi_bar(engines[s].tqi)}` "
-        f"{engines[s].tqi*100:.0f}%  `{stats[s].last_price:.5g}`"
-        for s in top5
-    ]
+    # ── Field 3：表現最佳 Top 5 ──────────────────
+    top_performers = sorted(
+        [s for s in symbols if stats[s].trade_count > 0],
+        key=lambda s: stats[s].realized_pnl,
+        reverse=True,
+    )[:5]
+
+    if top_performers:
+        lines = []
+        for sym in top_performers:
+            st = stats[sym]
+            p_sign = "+" if st.realized_pnl >= 0 else ""
+            lines.append(
+                f"`{sym}`  盈虧 `{p_sign}{st.realized_pnl:.2f}%`  "
+                f"({st.trade_count} 筆, 勝率 {st.win_rate:.0f}%)"
+            )
+        fields.append({
+            "name":   "⭐ 表現最佳",
+            "value":  "\n".join(lines),
+            "inline": False,
+        })
+
+    # ── Field 4：TQI 最高 Top 5 ──────────────────
+    top_tqi = sorted(symbols, key=lambda s: engines[s].tqi, reverse=True)[:5]
+    lines = []
+    for sym in top_tqi:
+        eng = engines[sym]
+        te  = _trend_emoji(eng.trend)
+        lines.append(f"`{sym}` {te}  {_tqi_bar(eng.tqi)}  `{eng.tqi*100:.0f}%`  `{eng.last_close:.6g}`")
     fields.append({
-        "name":   "⭐ TQI Top 5",
-        "value":  "\n".join(top5_lines) if top5_lines else "—",
+        "name":   "🔥 TQI Top 5",
+        "value":  "\n".join(lines),
         "inline": False,
     })
 
     return {
         "title":       f"⏰  每小時狀態報告  —  {now.strftime('%H:%M UTC')}",
         "description": description,
-        "color":       COLOR_INFO,
+        "color":       0x5C6BC0,
         "fields":      fields,
-        "footer":      {"text": "SATS Bot v1.9.0  •  下次報告於 1 小時後"},
         "timestamp":   now.isoformat(),
+        "footer":      {"text": f"SATS Bot v1.9.0  •  下次報告於 1 小時後"},
     }
 
 
@@ -384,18 +378,7 @@ def build_hourly_report(
 # 每小時報告執行緒
 # ══════════════════════════════════════════════════
 class HourlyReporter(threading.Thread):
-    """每整點（或每隔 interval_sec）發送一次報告"""
-
-    def __init__(
-        self,
-        notifier:   DiscordNotifier,
-        symbols:    List[str],
-        engines:    Dict[str, SATSEngine],
-        stats:      Dict[str, SymbolStats],
-        interval:   str,
-        start_time: float,
-        interval_sec: int = 3600,
-    ):
+    def __init__(self, notifier, symbols, engines, stats, interval, start_time, interval_sec=3600):
         super().__init__(daemon=True)
         self.notifier     = notifier
         self.symbols      = symbols
@@ -523,6 +506,9 @@ class SATSBot:
         self.interval = interval or cfg["interval"]
         self.min_score = cfg["filters"]["min_score"]
 
+        # 資料庫
+        self.db = SATSDatabase()
+
         # 每幣種引擎
         self.engines: Dict[str, SATSEngine] = {
             sym: SATSEngine(sym, self.interval, cfg)
@@ -533,11 +519,6 @@ class SATSBot:
         self.stats: Dict[str, SymbolStats] = {
             sym: SymbolStats() for sym in self.symbols
         }
-
-        # SQLite 資料庫（數據持久化）
-        db_cfg = cfg.get("database", {})
-        db_path = db_cfg.get("path", "sats_bot.db")
-        self.db = SATSDatabase(db_path=db_path)
 
         # Discord 通知器
         dc = cfg["discord"]
@@ -612,13 +593,6 @@ class SATSBot:
         )
         self._send_embed(embed)
 
-        # ── 記錄系統啟動事件到資料庫 ──────────────────
-        self.db.log_system_event(
-            event_type="BOT_START",
-            message="SATS Bot 已啟動",
-            details=f"Symbols: {len(self.symbols)}, Interval: {self.interval}, Min Score: {self.min_score}"
-        )
-
         # ── 啟動每小時報告執行緒 ──────────────────
         report_sec = self.cfg["system"].get("hourly_report_interval", 3600)
         self._reporter = HourlyReporter(
@@ -658,15 +632,6 @@ class SATSBot:
         uptime = time.time() - self._start_time
         embed  = build_shutdown_embed(self.symbols, self.stats, uptime, reason)
         self._send_embed(embed)
-
-        # ── 記錄系統關閉事件到資料庫 ──────────────────
-        if hasattr(self, 'db'):
-            self.db.log_system_event(
-                event_type="BOT_SHUTDOWN",
-                message=f"SATS Bot 已關閉：{reason}",
-                details=f"Uptime: {uptime:.0f}秒"
-            )
-
         logger.info("已關閉 ✅")
 
     # ── 預熱 ──────────────────────────────────────
@@ -720,11 +685,10 @@ class SATSBot:
         # 同步更新 WS 管理器，排除預熱失敗的幣種
         if failed_syms:
             self.ws_manager.symbols = self.symbols
-            logger.warning(f"預熱移除無效幣種: {failed_syms}，剩餘監控: {self.symbols}")
 
         return results
 
-    # ── K 棒回調（所有幣種共用此函數）────────────
+    # ── WebSocket 回調 ────────────────────────────
     def _on_kline(self, symbol: str, kline: dict):
         engine = self.engines.get(symbol)
         stat   = self.stats.get(symbol)
@@ -782,23 +746,9 @@ class SATSBot:
             # 反方向：ST 翻轉，舊倉已由 _check_hits 關閉（或將由 timeout 處理）
             # 允許繼續往下發出新訊號通知
 
-        # ── 計算盈虧（先於通知發送，以獲取 pnl_field） ────
-        pnl = stat.record_signal(sig, sent=True)
-        pnl_field = None
-        if pnl is not None:
-            pnl_sign   = "+" if pnl >= 0 else ""
-            pnl_emoji  = "📈" if pnl >= 0 else "📉"
-            cum_sign   = "+" if stat.realized_pnl >= 0 else ""
-            pnl_field  = {
-                "name":   f"{pnl_emoji} 已實現盈虧",
-                "value":  (
-                    f"本次 `{pnl_sign}{pnl:.2f}%`\n"
-                    f"累積 `{cum_sign}{stat.realized_pnl:.2f}%`"
-                    f"  /  {stat.trade_count} 筆"
-                    + (f"  /  勝率 {stat.win_rate:.0f}%" if stat.win_rate is not None else "")
-                ),
-                "inline": True,
-            }
+        # ── 記錄訊號 ────
+        stat.record_signal(sig, sent=True)
+        pnl_field = None  # 訊號通知中暫不顯示 PnL，由關倉通知負責
 
         # ── 記錄訊號到資料庫 ────────────────────────────
         signal_data = {
@@ -826,27 +776,14 @@ class SATSBot:
         signal_id = self.db.record_signal(signal_data, sent=True)
 
         # ── 更新資料庫統計 ──────────────────────────────
-        if pnl is not None:
-            is_win = pnl > 0
-            self.db.update_symbol_stats(
-                symbol=sig.symbol,
-                interval=sig.interval,
-                signal_sent=True,
-                direction=sig.direction,
-                pnl=pnl,
-                is_win=is_win,
-                entry_price=sig.price,
-                entry_dir=sig.direction,
-            )
-        else:
-            self.db.update_symbol_stats(
-                symbol=sig.symbol,
-                interval=sig.interval,
-                signal_sent=True,
-                direction=sig.direction,
-                entry_price=sig.price,
-                entry_dir=sig.direction,
-            )
+        self.db.update_symbol_stats(
+            symbol=sig.symbol,
+            interval=sig.interval,
+            signal_sent=True,
+            direction=sig.direction,
+            entry_price=sig.price,
+            entry_dir=sig.direction,
+        )
 
         # ── 發送 Discord 通知（合併 Signal 與 Open 以避免速率限制） ──
         logger.info(
@@ -861,7 +798,7 @@ class SATSBot:
             if pnl_field:
                 signal_embed["fields"].insert(0, pnl_field)
             
-            # 判斷是否需要開倉通知 (只有當引擎真的開倉時才發送)
+            # 判斷是否需要開倉通知 (只有當 engine 真的開倉時才發送)
             embeds = [signal_embed]
             if engine.position is not None:
                 open_embed = build_open_embed(sig, self.notifier.mention_role)
