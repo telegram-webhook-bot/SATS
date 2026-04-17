@@ -704,81 +704,63 @@ class SATSBot:
 
     # ── K 棒回調（所有幣種共用此函數）────────────
     def _on_kline(self, symbol: str, kline: dict):
-    engine = self.engines.get(symbol)
-    stat   = self.stats.get(symbol)
-    if engine is None or stat is None:
-        return
+        engine = self.engines.get(symbol)
+        stat   = self.stats.get(symbol)
+        if engine is None or stat is None:
+            return
 
-    # ✅ 在 update() 之前快照持倉狀態
-    had_position_before = engine.position is not None
-    had_position_dir    = engine.position["direction"] if had_position_before else None
+        # ✅ 在 update() 之前快照持倉狀態
+        had_position_before = engine.position is not None
+        had_position_dir    = engine.position["direction"] if had_position_before else None
 
-    sig = engine.update(
-        open_     = kline["open"],
-        high      = kline["high"],
-        low       = kline["low"],
-        close     = kline["close"],
-        volume    = kline["volume"],
-        is_closed = kline["closed"],
-    )
+        sig = engine.update(
+            open_     = kline["open"],
+            high      = kline["high"],
+            low       = kline["low"],
+            close     = kline["close"],
+            volume    = kline["volume"],
+            is_closed = kline["closed"],
+        )
 
-    # 更新即時狀態
-    stat.update_state(kline["close"], engine.tqi, engine.trend)
+        # 更新即時狀態
+        stat.update_state(kline["close"], engine.tqi, engine.trend)
 
-    closed_mark = "✅" if kline["closed"] else "🔄"
-    logger.debug(
-        f"{closed_mark} [{symbol}] "
-        f"close={kline['close']:.4f}  "
-        f"TQI={engine.tqi:.3f}  trend={engine.trend}"
-    )
+        closed_mark = "✅" if kline["closed"] else "🔄"
+        logger.debug(
+            f"{closed_mark} [{symbol}] "
+            f"close={kline['close']:.4f}  "
+            f"TQI={engine.tqi:.3f}  trend={engine.trend}"
+        )
 
-    # ── 交易事件（TP / SL / Timeout）────────────
-    if kline["closed"]:
-        self._handle_trade_events(symbol, engine, stat)
+        # ── 交易事件（TP / SL / Timeout）────────────
+        if kline["closed"]:
+            self._handle_trade_events(symbol, engine, stat)
 
-    if sig is None:
-        return   # 無翻轉訊號
+        if sig is None:
+            return   # 無翻轉訊號
 
-    # ── 持倉檢查：用 update() 呼叫「之前」的狀態判斷 ──
-    # ✅ 不能用 engine.position，那已是新訊號寫入後的狀態
-    if had_position_before:
-        # 同方向：確實是重複訊號，過濾
-        if had_position_dir == sig.direction:
-            reason = f"目前已有 {had_position_dir} 持倉中"
-            logger.info(f"⚠️ [{symbol}] {sig.direction} 訊號已過濾 （{reason}）")
+        # ── 持倉檢查：用 update() 呼叫「之前」的狀態判斷 ──
+        # ✅ 不能用 engine.position，那已是新訊號寫入後的狀態
+        if had_position_before:
+            # 同方向：確實是重複訊號，過濾
+            if had_position_dir == sig.direction:
+                reason = f"目前已有 {had_position_dir} 持倉中"
+                logger.info(f"⚠️ [{symbol}] {sig.direction} 訊號已過濾 （{reason}）")
+                stat.signals_skipped += 1
+                self.notifier.send_skipped_signal(sig, reason)
+                return
+            # 反方向：ST 翻轉，舊倉已由 _check_hits 關閉（或將由 timeout 處理）
+            # 允許繼續往下發出新訊號通知
+
+        # 分數過濾
+        if sig.score < self.min_score:
+            reason = f"分數 {sig.score:.0f} < {self.min_score}"
+            logger.info(f"[{symbol}] {sig.direction} 跳過（{reason}）")
             stat.signals_skipped += 1
             self.notifier.send_skipped_signal(sig, reason)
             return
-        # 反方向：ST 翻轉，舊倉已由 _check_hits 關閉（或將由 timeout 處理）
-        # 允許繼續往下發出新訊號通知
 
-    # 分數過濾
-    if sig.score < self.min_score:
-        reason = f"分數 {sig.score:.0f} < {self.min_score}"
-        logger.info(f"[{symbol}] {sig.direction} 跳過（{reason}）")
-        stat.signals_skipped += 1
-        self.notifier.send_skipped_signal(sig, reason)
-        return
-
-
-        # ── 計算盈虧（先於通知發送，以獲取 pnl_field） ────
-        pnl = stat.record_signal(sig, sent=True)
-        pnl_field = None
-        if pnl is not None:
-            pnl_sign   = "+" if pnl >= 0 else ""
-            pnl_emoji  = "📈" if pnl >= 0 else "📉"
-            cum_sign   = "+" if stat.realized_pnl >= 0 else ""
-            pnl_field  = {
-                "name":   f"{pnl_emoji} 已實現盈虧",
-                "value":  (
-                    f"本次 `{pnl_sign}{pnl:.2f}%`\n"
-                    f"累積 `{cum_sign}{stat.realized_pnl:.2f}%`"
-                    f"  /  {stat.trade_count} 筆"
-                    + (f"  /  勝率 {stat.win_rate:.0f}%" if stat.win_rate is not None else "")
-                ),
-                "inline": True,
-            }
-
+        # ... 以下發送通知邏輯不變
         # ── 發送 Discord 通知（合併 Signal 與 Open 以避免速率限制） ──
         logger.info(
             f"🔔 [{symbol}] {sig.direction}  "
