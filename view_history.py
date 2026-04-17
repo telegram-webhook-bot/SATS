@@ -9,6 +9,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
 import sys
+import shutil
 
 # 資料庫路徑
 DB_PATH = Path("sats_bot.db")
@@ -24,6 +25,105 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
+def fix_database_structure():
+    """檢查並修復資料庫結構，自動新增缺失的欄位"""
+    if not DB_PATH.exists():
+        print(f"❌ 錯誤：找不到資料庫檔案 {DB_PATH}")
+        return False
+
+    # 自動備份
+    backup_path = f"{DB_PATH}.backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    try:
+        shutil.copy2(DB_PATH, backup_path)
+        print(f"💾 已建立備份：{backup_path}")
+    except Exception as e:
+        print(f"⚠️ 備份失敗：{e}")
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # 定義所有需要檢查的欄位 (根據 core/database.py 的結構)
+    fixes = [
+        # signals 表 - 檢查可能缺失的欄位
+        ("signals", "signal_type", "TEXT"),
+        ("signals", "entry_price", "REAL"),
+        ("signals", "status", "TEXT DEFAULT 'ACTIVE'"),
+        
+        # trade_closes 表 - 檢查可能缺失的欄位
+        ("trade_closes", "exit_reason", "TEXT"),
+        ("trade_closes", "closed_at", "TIMESTAMP"),
+        ("trade_closes", "pnl", "REAL"),
+        
+        # symbol_stats 表 - 檢查可能缺失的欄位
+        ("symbol_stats", "winning_trades", "INTEGER DEFAULT 0"),
+        ("symbol_stats", "losing_trades", "INTEGER DEFAULT 0"),
+        ("symbol_stats", "win_rate", "REAL DEFAULT 0.0"),
+        ("symbol_stats", "total_pnl", "REAL DEFAULT 0.0"),
+        ("symbol_stats", "avg_pnl", "REAL DEFAULT 0.0"),
+        ("symbol_stats", "max_profit", "REAL DEFAULT 0.0"),
+        ("symbol_stats", "max_loss", "REAL DEFAULT 0.0"),
+        ("symbol_stats", "last_updated", "TIMESTAMP"),
+        
+        # tp_sl_events 表 - 檢查可能缺失的欄位
+        ("tp_sl_events", "tp_level", "TEXT"),
+        ("tp_sl_events", "trigger_price", "REAL"),
+        ("tp_sl_events", "pnl_locked", "REAL"),
+        ("tp_sl_events", "triggered_at", "TIMESTAMP"),
+    ]
+
+    print("🔍 開始檢查並修復資料庫結構...\n")
+    
+    fixed_count = 0
+    for table, column, dtype in fixes:
+        try:
+            # 嘗試新增欄位
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {dtype}")
+            print(f"➕ 新增 {table}.{column} ({dtype})...")
+            
+            # 根據欄位類型更新舊數據
+            now = datetime.now().isoformat()
+            update_sql = None
+            if "TIMESTAMP" in dtype:
+                update_sql = f"UPDATE {table} SET {column} = ? WHERE {column} IS NULL"
+                params = (now,)
+            elif "DEFAULT 0" in dtype or "INTEGER" in dtype:
+                update_sql = f"UPDATE {table} SET {column} = 0 WHERE {column} IS NULL"
+                params = ()
+            elif "DEFAULT 0.0" in dtype or "REAL" in dtype:
+                update_sql = f"UPDATE {table} SET {column} = 0.0 WHERE {column} IS NULL"
+                params = ()
+            elif "DEFAULT 'ACTIVE'" in dtype:
+                update_sql = f"UPDATE {table} SET {column} = 'ACTIVE' WHERE {column} IS NULL"
+                params = ()
+            
+            if update_sql:
+                if params:
+                    cursor.execute(update_sql, params)
+                else:
+                    cursor.execute(update_sql)
+                print(f"   📝 已更新舊數據預設值")
+            
+            conn.commit()
+            fixed_count += 1
+            
+        except sqlite3.OperationalError as e:
+            if "duplicate column" in str(e).lower():
+                print(f"✓ {table}.{column} 已存在，跳過")
+            elif "no such table" in str(e).lower():
+                print(f"⚠️ 表 {table} 不存在，跳過")
+            else:
+                print(f"⚠️ 錯誤 {table}.{column}: {e}")
+    
+    conn.close()
+    
+    print("\n" + "="*50)
+    if fixed_count > 0:
+        print(f"✅ 成功修復 {fixed_count} 個欄位！")
+    else:
+        print("✅ 資料庫結構已是最新，無需修復。")
+    print("="*50)
+    return True
+
 def view_symbol_stats():
     """查看所有幣種的統計數據"""
     print("\n" + "="*80)
@@ -35,16 +135,16 @@ def view_symbol_stats():
         SELECT 
             symbol,
             total_trades,
-            winning_trades,
-            losing_trades,
-            win_rate,
-            total_pnl,
-            avg_pnl,
-            max_profit,
-            max_loss,
-            last_updated
+            win_trades as winning_trades,
+            (total_trades - win_trades) as losing_trades,
+            CASE WHEN total_trades > 0 THEN ROUND(CAST(win_trades AS REAL) / total_trades * 100, 2) ELSE 0.0 END as win_rate,
+            realized_pnl as total_pnl,
+            CASE WHEN total_trades > 0 THEN ROUND(realized_pnl / total_trades, 2) ELSE 0.0 END as avg_pnl,
+            0.0 as max_profit,
+            0.0 as max_loss,
+            updated_at as last_updated
         FROM symbol_stats
-        ORDER BY total_pnl DESC
+        ORDER BY realized_pnl DESC
     """
     
     df = pd.read_sql_query(query, conn)
@@ -73,13 +173,13 @@ def view_recent_signals(limit=20):
         SELECT 
             id,
             symbol,
-            signal_type,
-            entry_price,
+            direction as signal_type,
+            price as entry_price,
             score,
-            status,
-            created_at
+            CASE WHEN sent = 1 THEN 'SENT' ELSE 'SKIPPED' END as status,
+            timestamp as created_at
         FROM signals
-        ORDER BY created_at DESC
+        ORDER BY timestamp DESC
         LIMIT ?
     """
     
@@ -110,18 +210,18 @@ def view_trade_history(symbol=None, limit=50):
         query = """
             SELECT 
                 s.symbol,
-                s.signal_type,
-                s.entry_price,
+                s.direction as signal_type,
+                s.price as entry_price,
                 tc.exit_price,
-                tc.pnl,
+                tc.pnl_percent as pnl,
                 tc.pnl_percent,
-                tc.exit_reason,
-                s.created_at as entry_time,
-                tc.closed_at as exit_time
+                tc.close_reason as exit_reason,
+                s.entry_timestamp as entry_time,
+                tc.close_timestamp as exit_time
             FROM signals s
             JOIN trade_closes tc ON s.id = tc.signal_id
             WHERE s.symbol = ?
-            ORDER BY tc.closed_at DESC
+            ORDER BY tc.close_timestamp DESC
             LIMIT ?
         """
         df = pd.read_sql_query(query, conn, params=(symbol, limit))
@@ -129,17 +229,17 @@ def view_trade_history(symbol=None, limit=50):
         query = """
             SELECT 
                 s.symbol,
-                s.signal_type,
-                s.entry_price,
+                s.direction as signal_type,
+                s.price as entry_price,
                 tc.exit_price,
-                tc.pnl,
+                tc.pnl_percent as pnl,
                 tc.pnl_percent,
-                tc.exit_reason,
-                s.created_at as entry_time,
-                tc.closed_at as exit_time
+                tc.close_reason as exit_reason,
+                s.entry_timestamp as entry_time,
+                tc.close_timestamp as exit_time
             FROM signals s
             JOIN trade_closes tc ON s.id = tc.signal_id
-            ORDER BY tc.closed_at DESC
+            ORDER BY tc.close_timestamp DESC
             LIMIT ?
         """
         df = pd.read_sql_query(query, conn, params=(limit,))
@@ -171,13 +271,13 @@ def view_tp_sl_events(symbol=None, limit=30):
         query = """
             SELECT 
                 symbol,
-                tp_level,
-                trigger_price,
-                pnl_locked,
-                triggered_at
+                event_type as tp_level,
+                hit_price as trigger_price,
+                hit_r as pnl_locked,
+                timestamp as triggered_at
             FROM tp_sl_events
             WHERE symbol = ?
-            ORDER BY triggered_at DESC
+            ORDER BY timestamp DESC
             LIMIT ?
         """
         df = pd.read_sql_query(query, conn, params=(symbol, limit))
@@ -185,12 +285,12 @@ def view_tp_sl_events(symbol=None, limit=30):
         query = """
             SELECT 
                 symbol,
-                tp_level,
-                trigger_price,
-                pnl_locked,
-                triggered_at
+                event_type as tp_level,
+                hit_price as trigger_price,
+                hit_r as pnl_locked,
+                timestamp as triggered_at
             FROM tp_sl_events
-            ORDER BY triggered_at DESC
+            ORDER BY timestamp DESC
             LIMIT ?
         """
         df = pd.read_sql_query(query, conn, params=(limit,))
@@ -340,6 +440,7 @@ def show_menu():
     print("5. 生成績效報告")
     print("6. 匯出數據到 CSV")
     print("7. 自訂 SQL 查詢")
+    print("8. 修復資料庫結構")
     print("0. 退出")
     print("="*80)
 
@@ -372,7 +473,7 @@ def main():
     """主程式"""
     while True:
         show_menu()
-        choice = input("請選擇功能 (0-7): ").strip()
+        choice = input("請選擇功能 (0-8): ").strip()
         
         if choice == '1':
             view_symbol_stats()
@@ -406,6 +507,8 @@ def main():
             export_to_csv()
         elif choice == '7':
             custom_sql_query()
+        elif choice == '8':
+            fix_database_structure()
         elif choice == '0':
             print("👋 再見！")
             break
