@@ -29,6 +29,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent))
 
 from core.engine      import SATSEngine, SignalResult
+from core.database    import SATSDatabase
 from notifier.discord import (
     DiscordNotifier,
     COLOR_INFO, COLOR_WARN,
@@ -533,6 +534,11 @@ class SATSBot:
             sym: SymbolStats() for sym in self.symbols
         }
 
+        # SQLite 資料庫（數據持久化）
+        db_cfg = cfg.get("database", {})
+        db_path = db_cfg.get("path", "sats_bot.db")
+        self.db = SATSDatabase(db_path=db_path)
+
         # Discord 通知器
         dc = cfg["discord"]
         self.notifier = DiscordNotifier(
@@ -606,6 +612,13 @@ class SATSBot:
         )
         self._send_embed(embed)
 
+        # ── 記錄系統啟動事件到資料庫 ──────────────────
+        self.db.log_system_event(
+            event_type="BOT_START",
+            message="SATS Bot 已啟動",
+            details=f"Symbols: {len(self.symbols)}, Interval: {self.interval}, Min Score: {self.min_score}"
+        )
+
         # ── 啟動每小時報告執行緒 ──────────────────
         report_sec = self.cfg["system"].get("hourly_report_interval", 3600)
         self._reporter = HourlyReporter(
@@ -645,6 +658,15 @@ class SATSBot:
         uptime = time.time() - self._start_time
         embed  = build_shutdown_embed(self.symbols, self.stats, uptime, reason)
         self._send_embed(embed)
+
+        # ── 記錄系統關閉事件到資料庫 ──────────────────
+        if hasattr(self, 'db'):
+            self.db.log_system_event(
+                event_type="BOT_SHUTDOWN",
+                message=f"SATS Bot 已關閉：{reason}",
+                details=f"Uptime: {uptime:.0f}秒"
+            )
+
         logger.info("已關閉 ✅")
 
     # ── 預熱 ──────────────────────────────────────
@@ -778,6 +800,54 @@ class SATSBot:
                 "inline": True,
             }
 
+        # ── 記錄訊號到資料庫 ────────────────────────────
+        signal_data = {
+            "symbol": sig.symbol,
+            "interval": sig.interval,
+            "direction": sig.direction,
+            "price": sig.price,
+            "sl": sig.sl,
+            "tp1": sig.tp1,
+            "tp2": sig.tp2,
+            "tp3": sig.tp3,
+            "tp1_r": sig.tp1_r,
+            "tp2_r": sig.tp2_r,
+            "tp3_r": sig.tp3_r,
+            "score": sig.score,
+            "tqi": sig.tqi,
+            "er": sig.er,
+            "rsi": sig.rsi,
+            "vol_z": sig.vol_z,
+            "preset": sig.preset,
+            "tp_mode": sig.tp_mode,
+            "dyn_scale": sig.dyn_scale,
+            "bar_index": sig.bar_index,
+        }
+        signal_id = self.db.record_signal(signal_data, sent=True)
+
+        # ── 更新資料庫統計 ──────────────────────────────
+        if pnl is not None:
+            is_win = pnl > 0
+            self.db.update_symbol_stats(
+                symbol=sig.symbol,
+                interval=sig.interval,
+                signal_sent=True,
+                direction=sig.direction,
+                pnl=pnl,
+                is_win=is_win,
+                entry_price=sig.price,
+                entry_dir=sig.direction,
+            )
+        else:
+            self.db.update_symbol_stats(
+                symbol=sig.symbol,
+                interval=sig.interval,
+                signal_sent=True,
+                direction=sig.direction,
+                entry_price=sig.price,
+                entry_dir=sig.direction,
+            )
+
         # ── 發送 Discord 通知（合併 Signal 與 Open 以避免速率限制） ──
         logger.info(
             f"🔔 [{symbol}] {sig.direction}  "
@@ -860,6 +930,11 @@ class SATSBot:
                 logger.info(f"[{symbol}] 關倉通知 {'✅' if ok else '❌'}")
 
     # ── 工具 ──────────────────────────────────────
+    def _get_latest_signal_id(self, symbol: str) -> int:
+        """取得該幣種最新的訊號 ID（用於關聯 TP/SL 事件）"""
+        signals = self.db.get_recent_signals(symbol=symbol, limit=1)
+        return signals[0]["id"] if signals else 0
+
     def _send_embed(self, embed: dict):
         """直接發送 embed（不透過 DiscordNotifier 的 rate-limit 等待）"""
         import requests as req
