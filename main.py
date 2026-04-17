@@ -725,6 +725,12 @@ class SATSBot:
             is_closed = kline["closed"],
         )
 
+        # ── 交易事件（TP / SL / Timeout）────────────
+        # 修正：不論 K 棒是否關閉，只要有事件就處理（例如即時觸發的 TP/SL）
+        if engine.trade_events:
+            self._handle_trade_events(symbol, engine, stat)
+            engine._trade_events = []  # 處理完後手動清空，避免重複發送
+
         # 更新即時狀態
         stat.update_state(kline["close"], engine.tqi, engine.trend)
 
@@ -734,10 +740,6 @@ class SATSBot:
             f"close={kline['close']:.4f}  "
             f"TQI={engine.tqi:.3f}  trend={engine.trend}"
         )
-
-        # ── 交易事件（TP / SL / Timeout）────────────
-        if kline["closed"]:
-            self._handle_trade_events(symbol, engine, stat)
 
         if sig is None:
             return   # 無翻轉訊號
