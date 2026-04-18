@@ -896,21 +896,22 @@ class SATSBot:
                 # 取得 signal_id 用於檢查和記錄
                 signal_id = self._get_latest_signal_id(symbol)
                 
-                # 如果找不到 signal_id，跳過記錄但仍發送通知
-                if not signal_id:
-                    logger.warning(f"[{symbol}] {evt_type} 找不到 signal_id，跳過資料庫記錄")
-                    # 仍舊計算統計
-                    entry  = evt["entry"]
-                    exit_p = evt["exit_price"]
-                    if evt["direction"] == "BUY":
-                        pnl = (exit_p - entry) / entry * 100
-                    else:
-                        pnl = (entry - exit_p) / entry * 100
+                # 計算本次盈虧（無論是否有 signal_id 都需要）
+                entry  = evt["entry"]
+                exit_p = evt["exit_price"]
+                if evt["direction"] == "BUY":
+                    pnl = (exit_p - entry) / entry * 100
+                else:
+                    pnl = (entry - exit_p) / entry * 100
 
-                    stat.realized_pnl += pnl
-                    stat.trade_count  += 1
-                    if pnl > 0.000001:
-                        stat.win_count += 1
+                stat.realized_pnl += pnl
+                stat.trade_count  += 1
+                if pnl > 0.000001:
+                    stat.win_count += 1
+                
+                # 如果找不到 signal_id，仍要記錄統計、發送通知，但不記錄詳細事件
+                if not signal_id:
+                    logger.warning(f"[{symbol}] {evt_type} 找不到 signal_id，跳過詳細記錄但仍發送通知")
                     
                     # 更新資料庫統計（不需要 signal_id）
                     self.db.update_symbol_stats(
@@ -920,6 +921,15 @@ class SATSBot:
                         is_win=(pnl > 0.000001),
                         pnl=pnl
                     )
+                    
+                    # 發送關倉通知
+                    ok = self.notifier.send_close(
+                        evt, symbol, self.interval,
+                        realized_pnl = stat.realized_pnl,
+                        trade_count  = stat.trade_count,
+                        win_rate     = stat.win_rate,
+                    )
+                    logger.info(f"[{symbol}] 關倉通知 {'✅' if ok else '❌'}")
                     continue
                 
                 # 1. 檢查是否已記錄過此事件
