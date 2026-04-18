@@ -854,12 +854,19 @@ class SATSBot:
                 # 記錄 TP 命中事件
                 signal_id = self._get_latest_signal_id(symbol)
                 if signal_id:
+                    # 1. 檢查是否已記錄過，防止重複處理
+                    existing = self.db.get_tp_sl_event(signal_id, evt_type)
+                    if existing:
+                        logger.info(f"[{symbol}] {evt_type} 已處理過，跳過")
+                        continue
+                    
                     hit_tp = None
                     if evt_type == "tp1_hit":
                         hit_tp = 1
                     elif evt_type == "tp2_hit":
                         hit_tp = 2
                     
+                    # 2. 寫入資料庫鎖定狀態
                     self.db.record_tp_sl_event(
                         signal_id=signal_id,
                         symbol=symbol,
@@ -868,9 +875,10 @@ class SATSBot:
                         hit_tp=hit_tp,
                         hit_r=evt.get("hit_r"),
                     )
-                
-                ok = self.notifier.send_tp_hit(evt, symbol, self.interval)
-                logger.info(f"[{symbol}] {evt_type} 通知 {'✅' if ok else '❌'}")
+                    
+                    # 3. 發送通知
+                    ok = self.notifier.send_tp_hit(evt, symbol, self.interval)
+                    logger.info(f"[{symbol}] {evt_type} 通知 {'✅' if ok else '❌'}")
 
             elif evt_type in ("tp3_hit", "sl_hit", "timeout"):
                 # 計算本次盈虧
