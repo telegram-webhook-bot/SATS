@@ -851,6 +851,24 @@ class SATSBot:
             logger.info(f"[{symbol}] 交易事件: {evt_type}")
 
             if evt_type in ("tp1_hit", "tp2_hit"):
+                # 記錄 TP 命中事件
+                signal_id = self._get_latest_signal_id(symbol)
+                if signal_id:
+                    hit_tp = None
+                    if evt_type == "tp1_hit":
+                        hit_tp = 1
+                    elif evt_type == "tp2_hit":
+                        hit_tp = 2
+                    
+                    self.db.record_tp_sl_event(
+                        signal_id=signal_id,
+                        symbol=symbol,
+                        event_type=evt_type,
+                        hit_price=evt["hit_price"],
+                        hit_tp=hit_tp,
+                        hit_r=evt.get("hit_r"),
+                    )
+                
                 ok = self.notifier.send_tp_hit(evt, symbol, self.interval)
                 logger.info(f"[{symbol}] {evt_type} 通知 {'✅' if ok else '❌'}")
 
@@ -876,6 +894,34 @@ class SATSBot:
                     f"累積={cum_sign}{stat.realized_pnl:.2f}%  "
                     f"勝率={stat.win_rate:.0f}%" if stat.win_rate else ""
                 )
+
+                # 取得 signal_id 用於記錄
+                signal_id = self._get_latest_signal_id(symbol)
+                
+                # 記錄平倉交易到資料庫
+                if signal_id:
+                    # 先記錄 TP/SL 事件
+                    self.db.record_tp_sl_event(
+                        signal_id=signal_id,
+                        symbol=symbol,
+                        event_type=evt_type,
+                        hit_price=exit_p,
+                        hit_tp=None,
+                        hit_r=None,
+                    )
+                    
+                    # 記錄完整的平倉交易
+                    self.db.record_trade_close(
+                        signal_id=signal_id,
+                        symbol=symbol,
+                        entry_price=entry,
+                        exit_price=exit_p,
+                        direction=evt["direction"],
+                        pnl_percent=pnl,
+                        close_reason=evt_type,
+                        entry_timestamp=evt.get("entry_time", ""),
+                        bars_held=evt.get("bars_held", 0),
+                    )
 
                 # 更新資料庫統計
                 self.db.update_symbol_stats(
