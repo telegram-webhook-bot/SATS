@@ -750,6 +750,12 @@ class SATSBot:
             reason = f"分數 {sig.score:.0f} < {self.min_score}"
             logger.info(f"[{symbol}] {sig.direction} 跳過（{reason}）")
             stat.signals_skipped += 1
+            # 更新資料庫統計（記錄被過濾的訊號）
+            self.db.update_symbol_stats(
+                symbol=symbol,
+                interval=sig.interval,
+                signal_sent=False,
+            )
             return
 
         # ── 2. 持倉檢查：用 update() 呼叫「之前」的狀態判斷 ──
@@ -760,6 +766,12 @@ class SATSBot:
                 reason = f"目前已有 {had_position_dir} 持倉中"
                 logger.info(f"⚠️ [{symbol}] {sig.direction} 訊號已過濾 （{reason}）")
                 stat.signals_skipped += 1
+                # 更新資料庫統計（記錄被過濾的訊號）
+                self.db.update_symbol_stats(
+                    symbol=symbol,
+                    interval=sig.interval,
+                    signal_sent=False,
+                )
                 self.notifier.send_skipped_signal(sig, reason)
                 return
             # 反方向：ST 翻轉，舊倉已由 _check_hits 關閉（或將由 timeout 處理）
@@ -881,6 +893,41 @@ class SATSBot:
                     logger.info(f"[{symbol}] {evt_type} 通知 {'✅' if ok else '❌'}")
 
             elif evt_type in ("tp3_hit", "sl_hit", "timeout"):
+                # 取得 signal_id 用於檢查和記錄
+                signal_id = self._get_latest_signal_id(symbol)
+                
+                # 如果找不到 signal_id，跳過記錄但仍發送通知
+                if not signal_id:
+                    logger.warning(f"[{symbol}] {evt_type} 找不到 signal_id，跳過資料庫記錄")
+                    # 仍舊計算統計
+                    entry  = evt["entry"]
+                    exit_p = evt["exit_price"]
+                    if evt["direction"] == "BUY":
+                        pnl = (exit_p - entry) / entry * 100
+                    else:
+                        pnl = (entry - exit_p) / entry * 100
+
+                    stat.realized_pnl += pnl
+                    stat.trade_count  += 1
+                    if pnl > 0.000001:
+                        stat.win_count += 1
+                    
+                    # 更新資料庫統計（不需要 signal_id）
+                    self.db.update_symbol_stats(
+                        symbol=symbol,
+                        interval=self.interval,
+                        signal_sent=False,
+                        is_win=(pnl > 0.000001),
+                        pnl=pnl
+                    )
+                    continue
+                
+                # 1. 檢查是否已記錄過此事件
+                existing = self.db.get_tp_sl_event(signal_id, evt_type)
+                if existing:
+                    logger.info(f"[{symbol}] {evt_type} 已處理過，跳過")
+                    continue
+                
                 # 計算本次盈虧
                 entry  = evt["entry"]
                 exit_p = evt["exit_price"]
@@ -902,34 +949,29 @@ class SATSBot:
                     f"累積={cum_sign}{stat.realized_pnl:.2f}%  "
                     f"勝率={stat.win_rate:.0f}%" if stat.win_rate else ""
                 )
-
-                # 取得 signal_id 用於記錄
-                signal_id = self._get_latest_signal_id(symbol)
                 
-                # 記錄平倉交易到資料庫
-                if signal_id:
-                    # 先記錄 TP/SL 事件
-                    self.db.record_tp_sl_event(
-                        signal_id=signal_id,
-                        symbol=symbol,
-                        event_type=evt_type,
-                        hit_price=exit_p,
-                        hit_tp=None,
-                        hit_r=None,
-                    )
-                    
-                    # 記錄完整的平倉交易
-                    self.db.record_trade_close(
-                        signal_id=signal_id,
-                        symbol=symbol,
-                        entry_price=entry,
-                        exit_price=exit_p,
-                        direction=evt["direction"],
-                        pnl_percent=pnl,
-                        close_reason=evt_type,
-                        entry_timestamp=evt.get("entry_time", ""),
-                        bars_held=evt.get("bars_held", 0),
-                    )
+                # 先記錄 TP/SL 事件（signal_id 已在前面檢查過存在）
+                self.db.record_tp_sl_event(
+                    signal_id=signal_id,
+                    symbol=symbol,
+                    event_type=evt_type,
+                    hit_price=exit_p,
+                    hit_tp=None,
+                    hit_r=None,
+                )
+                
+                # 記錄完整的平倉交易
+                self.db.record_trade_close(
+                    signal_id=signal_id,
+                    symbol=symbol,
+                    entry_price=entry,
+                    exit_price=exit_p,
+                    direction=evt["direction"],
+                    pnl_percent=pnl,
+                    close_reason=evt_type,
+                    entry_timestamp=evt.get("entry_time", ""),
+                    bars_held=evt.get("bars_held", 0),
+                )
 
                 # 更新資料庫統計
                 self.db.update_symbol_stats(
