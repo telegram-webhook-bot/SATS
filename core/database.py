@@ -223,6 +223,19 @@ class SATSDatabase:
                 datetime.now(timezone.utc).isoformat(),
             ))
 
+    def get_tp_sl_event(self, signal_id: int, event_type: str) -> Optional[Dict[str, Any]]:
+        """查詢是否已存在指定的 TP/SL 事件記錄"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM tp_sl_events
+                WHERE signal_id = ? AND event_type = ?
+            """, (signal_id, event_type))
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+            return None
+
     # ── 交易平倉記錄 ─────────────────────────────────
     def record_trade_close(
         self,
