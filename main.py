@@ -358,9 +358,10 @@ def build_hourly_report(
     lines = []
     for sym in top_tqi:
         eng = engines[sym]
+        st = stats[sym]
         te  = _trend_emoji(eng.trend)
-        # 安全檢查：若 last_close 尚未定義，則顯示 N/A
-        price_str = f"{eng.last_close:.6g}" if hasattr(eng, "last_close") else "N/A"
+        # 使用 stats 中已更新的實時價格
+        price_str = f"{st.last_price:.6g}" if st.last_price > 0 else "N/A"
         lines.append(f"`{sym}` {te}  {_tqi_bar(eng.tqi)}  `{eng.tqi*100:.0f}%`  `{price_str}`")
     fields.append({
         "name":   "🔥 TQI Top 5",
