@@ -1009,9 +1009,17 @@ async def main():
 
     # 處理系統信號 (SIGINT, SIGTERM)
     loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, lambda: asyncio.create_task(bot.stop("系統信號中斷")))
-
+    
+    # 僅在 Linux/Mac 上註冊信號處理，Windows 不支持 add_signal_handler
+    if platform.system() != "Windows":
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, lambda: asyncio.create_task(bot.stop("系統信號中斷")))
+    
+    # Windows 用戶請直接使用 Ctrl+C 終止，或使用以下兼容方案捕捉鍵盤中斷
+    try:
+        await bot.start()
+    except KeyboardInterrupt:
+        await bot.stop("用戶手動中斷 (Ctrl+C)")
     # ── --positions：預熱後立即發送持倉，然後繼續 ──
     if args.positions:
         # 在 start() 之前 hook：先 warmup，發送持倉，再跑主迴圈
