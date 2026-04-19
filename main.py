@@ -18,6 +18,7 @@ import logging
 import signal
 import sys
 import threading
+import asyncio
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -27,13 +28,14 @@ from typing import Dict, List, Optional
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent)) # Add project root to path for module discovery
 
 from core.engine      import SATSEngine, SignalResult
 from core.database    import SATSDatabase
 from notifier.discord import (
     DiscordNotifier,
     COLOR_INFO, COLOR_WARN,
-    build_signal_embed, build_open_embed, build_tp_hit_embed, build_close_embed,
+    build_signal_embed, build_open_embed, build_tp_hit_embed, build_close_embed, build_positions_embed,
 )
 
 # 交易所模組在 load_config 後動態選擇（見 _load_exchange_module）
@@ -551,7 +553,7 @@ class SATSBot:
         self.ws_manager = _WSManagerClass(
             symbols         = self.symbols,
             interval        = self.interval,
-            on_kline        = self._on_kline,
+            on_kline_callback = self._on_kline,
             reconnect_delay = sys_cfg.get("reconnect_delay", 5),
             max_reconnect   = sys_cfg.get("max_reconnect", 10),
         )
@@ -562,7 +564,7 @@ class SATSBot:
         self._shutdown_reason    = "手動停止"
 
     # ── 啟動 ──────────────────────────────────────
-    def start(self):
+    async def start(self):
         logger.info("=" * 60)
         logger.info("  SATS Bot 啟動中")
         logger.info(f"  幣種: {self.symbols}")
@@ -624,7 +626,7 @@ class SATSBot:
         self._reporter.start()
 
         # ── 啟動 WebSocket ────────────────────────
-        self.ws_manager.start()
+        await self.ws_manager.start()
 
         logger.info(f"✅ 正在監控 {len(self.symbols)} 個幣種，等待訊號...")
 
@@ -634,7 +636,7 @@ class SATSBot:
         except KeyboardInterrupt:
             self.shutdown("鍵盤中斷 (Ctrl+C)")
 
-    def shutdown(self, reason: str = "手動停止"):
+    async def stop(self, reason: str = "手動停止"):
         if self._shutdown:
             return
         self._shutdown_reason = reason
@@ -643,13 +645,38 @@ class SATSBot:
 
         if self._reporter:
             self._reporter.stop()
-        self.ws_manager.stop()
+        await self.ws_manager.stop()
 
         # ── 關閉通知 ──────────────────────────────
         uptime = time.time() - self._start_time
         embed  = build_shutdown_embed(self.symbols, self.stats, uptime, reason)
         self._send_embed(embed)
         logger.info("已關閉 ✅")
+
+    # ── 發送持倉總覽 ──────────────────────────────
+    def send_positions(self):
+        logger.info("📊 正在發送持倉總覽...")
+        positions = []
+        for sym, engine in self.engines.items():
+            if engine.position:
+                pos = engine.position
+                positions.append({
+                    "symbol": sym,
+                    "direction": pos["direction"],
+                    "entry_price": pos["entry_price"],
+                    "sl": pos["sl"],
+                    "tp1": pos["tp1"],
+                    "tp2": pos["tp2"],
+                    "tp3": pos["tp3"],
+                    "pnl": self.stats[sym].realized_pnl, # 使用已實現盈虧
+                    "bars_open": engine.bars_open,
+                })
+        if positions:
+            embed = build_positions_embed(positions)
+            self._send_embed(embed)
+            logger.info("📊 持倉總覽發送完成 ✅")
+        else:
+            logger.info("📊 目前沒有任何持倉。")
 
     # ── 預熱 ──────────────────────────────────────
     def _warmup_all(self) -> dict:
@@ -727,8 +754,9 @@ class SATSBot:
 
         # ── 交易事件（TP / SL / Timeout）────────────
         # 修正：不論 K 棒是否關閉，只要有事件就處理（例如即時觸發的 TP/SL）
-        if engine.trade_events:
-            self._handle_trade_events(symbol, engine, stat)
+        # 確保 signal_id 已被記錄，才能正確關聯交易事件
+        if engine.trade_events and engine.signal_id is not None:
+            self._handle_trade_events(symbol, engine, stat, engine.signal_id)
             engine._trade_events = []  # 處理完後手動清空，避免重複發送
 
         # 更新即時狀態
@@ -750,12 +778,6 @@ class SATSBot:
             reason = f"分數 {sig.score:.0f} < {self.min_score}"
             logger.info(f"[{symbol}] {sig.direction} 跳過（{reason}）")
             stat.signals_skipped += 1
-            # 更新資料庫統計（記錄被過濾的訊號）
-            self.db.update_symbol_stats(
-                symbol=symbol,
-                interval=sig.interval,
-                signal_sent=False,
-            )
             return
 
         # ── 2. 持倉檢查：用 update() 呼叫「之前」的狀態判斷 ──
@@ -766,20 +788,10 @@ class SATSBot:
                 reason = f"目前已有 {had_position_dir} 持倉中"
                 logger.info(f"⚠️ [{symbol}] {sig.direction} 訊號已過濾 （{reason}）")
                 stat.signals_skipped += 1
-                # 更新資料庫統計（記錄被過濾的訊號）
-                self.db.update_symbol_stats(
-                    symbol=symbol,
-                    interval=sig.interval,
-                    signal_sent=False,
-                )
                 self.notifier.send_skipped_signal(sig, reason)
                 return
             # 反方向：ST 翻轉，舊倉已由 _check_hits 關閉（或將由 timeout 處理）
             # 允許繼續往下發出新訊號通知
-
-        # ── 記錄訊號 ────
-        stat.record_signal(sig, sent=True)
-        pnl_field = None  # 訊號通知中暫不顯示 PnL，由關倉通知負責
 
         # ── 記錄訊號到資料庫 ────────────────────────────
         signal_data = {
@@ -805,6 +817,12 @@ class SATSBot:
             "bar_index": sig.bar_index,
         }
         signal_id = self.db.record_signal(signal_data, sent=True)
+        # 將 signal_id 傳遞給 engine，以便後續交易事件關聯
+        engine.set_signal_id(signal_id)
+
+        # ── 記錄訊號 ────
+        stat.record_signal(sig, sent=True)
+        pnl_field = None  # 訊號通知中暫不顯示 PnL，由關倉通知負責
 
         # ── 更新資料庫統計 ──────────────────────────────
         self.db.update_symbol_stats(
@@ -857,87 +875,16 @@ class SATSBot:
             logger.error(f"[{symbol}] 通知發送過程發生錯誤: {e}", exc_info=True)
 
     # ── 交易事件處理（TP 命中 / 關倉）────────────────
-    def _handle_trade_events(self, symbol: str, engine: "SATSEngine", stat: "SymbolStats"):
+    def _handle_trade_events(self, symbol: str, engine: "SATSEngine", stat: "SymbolStats", signal_id: int):
         for evt in engine.trade_events:
             evt_type = evt["type"]
             logger.info(f"[{symbol}] 交易事件: {evt_type}")
 
             if evt_type in ("tp1_hit", "tp2_hit"):
-                # 記錄 TP 命中事件
-                signal_id = self._get_latest_signal_id(symbol)
-                if signal_id:
-                    # 1. 檢查是否已記錄過，防止重複處理
-                    existing = self.db.get_tp_sl_event(signal_id, evt_type)
-                    if existing:
-                        logger.info(f"[{symbol}] {evt_type} 已處理過，跳過")
-                        continue
-                    
-                    hit_tp = None
-                    if evt_type == "tp1_hit":
-                        hit_tp = 1
-                    elif evt_type == "tp2_hit":
-                        hit_tp = 2
-                    
-                    # 2. 寫入資料庫鎖定狀態
-                    self.db.record_tp_sl_event(
-                        signal_id=signal_id,
-                        symbol=symbol,
-                        event_type=evt_type,
-                        hit_price=evt["hit_price"],
-                        hit_tp=hit_tp,
-                        hit_r=evt.get("hit_r"),
-                    )
-                    
-                    # 3. 發送通知
-                    ok = self.notifier.send_tp_hit(evt, symbol, self.interval)
-                    logger.info(f"[{symbol}] {evt_type} 通知 {'✅' if ok else '❌'}")
+                ok = self.notifier.send_tp_hit(evt, symbol, self.interval)
+                logger.info(f"[{symbol}] {evt_type} 通知 {'✅' if ok else '❌'}")
 
             elif evt_type in ("tp3_hit", "sl_hit", "timeout"):
-                # 取得 signal_id 用於檢查和記錄
-                signal_id = self._get_latest_signal_id(symbol)
-                
-                # 計算本次盈虧（無論是否有 signal_id 都需要）
-                entry  = evt["entry"]
-                exit_p = evt["exit_price"]
-                if evt["direction"] == "BUY":
-                    pnl = (exit_p - entry) / entry * 100
-                else:
-                    pnl = (entry - exit_p) / entry * 100
-
-                stat.realized_pnl += pnl
-                stat.trade_count  += 1
-                if pnl > 0.000001:
-                    stat.win_count += 1
-                
-                # 如果找不到 signal_id，仍要記錄統計、發送通知，但不記錄詳細事件
-                if not signal_id:
-                    logger.warning(f"[{symbol}] {evt_type} 找不到 signal_id，跳過詳細記錄但仍發送通知")
-                    
-                    # 更新資料庫統計（不需要 signal_id）
-                    self.db.update_symbol_stats(
-                        symbol=symbol,
-                        interval=self.interval,
-                        signal_sent=False,
-                        is_win=(pnl > 0.000001),
-                        pnl=pnl
-                    )
-                    
-                    # 發送關倉通知
-                    ok = self.notifier.send_close(
-                        evt, symbol, self.interval,
-                        realized_pnl = stat.realized_pnl,
-                        trade_count  = stat.trade_count,
-                        win_rate     = stat.win_rate,
-                    )
-                    logger.info(f"[{symbol}] 關倉通知 {'✅' if ok else '❌'}")
-                    continue
-                
-                # 1. 檢查是否已記錄過此事件
-                existing = self.db.get_tp_sl_event(signal_id, evt_type)
-                if existing:
-                    logger.info(f"[{symbol}] {evt_type} 已處理過，跳過")
-                    continue
-                
                 # 計算本次盈虧
                 entry  = evt["entry"]
                 exit_p = evt["exit_price"]
@@ -959,35 +906,20 @@ class SATSBot:
                     f"累積={cum_sign}{stat.realized_pnl:.2f}%  "
                     f"勝率={stat.win_rate:.0f}%" if stat.win_rate else ""
                 )
-                
-                # 先記錄 TP/SL 事件（signal_id 已在前面檢查過存在）
-                self.db.record_tp_sl_event(
-                    signal_id=signal_id,
-                    symbol=symbol,
-                    event_type=evt_type,
-                    hit_price=exit_p,
-                    hit_tp=None,
-                    hit_r=None,
-                )
-                
-                # 記錄完整的平倉交易
-                self.db.record_trade_close(
-                    signal_id=signal_id,
-                    symbol=symbol,
-                    entry_price=entry,
-                    exit_price=exit_p,
-                    direction=evt["direction"],
-                    pnl_percent=pnl,
-                    close_reason=evt_type,
-                    entry_timestamp=evt.get("entry_time", ""),
-                    bars_held=evt.get("bars_held", 0),
-                )
 
                 # 更新資料庫統計
+                self.db.update_trade_event(
+                    signal_id=signal_id,
+                    event_type=evt_type,
+                    exit_price=exit_p,
+                    pnl=pnl,
+                    is_win=(pnl > 0.000001),
+                    bars_open=evt["bars_open"]
+                )
                 self.db.update_symbol_stats(
                     symbol=symbol,
                     interval=self.interval,
-                    signal_sent=False,  # 這是平倉事件，不是新訊號
+                    trade_completed=True,
                     is_win=(pnl > 0.000001),
                     pnl=pnl
                 )
@@ -1030,7 +962,7 @@ class SATSBot:
 # ══════════════════════════════════════════════════
 # CLI 入口
 # ══════════════════════════════════════════════════
-def main():
+async def main():
     parser = argparse.ArgumentParser(description="SATS Bot — 多幣種本地監控系統")
     parser.add_argument("--config",    default="config/config.yaml")
     parser.add_argument("--symbol",    action="append", dest="symbols",
@@ -1083,8 +1015,8 @@ def main():
             bot.send_positions()
         threading.Thread(target=_delayed_positions, daemon=True).start()
 
-    bot.start()
+    await bot.start()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
