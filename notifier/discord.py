@@ -245,41 +245,6 @@ def build_signal_embed(sig: SignalResult, mention_role: str = "") -> dict:
 
 
 # ══════════════════════════════════════════════════
-# 持倉總覽 Embed
-# ══════════════════════════════════════════════════
-def build_positions_embed(positions: list[dict]) -> dict:
-    """生成當前所有持倉的總覽 Embed。"""
-    from datetime import datetime, timezone
-    
-    description_lines = []
-    total_pnl = 0.0
-    
-    for pos in positions:
-        direction_emoji = "🟢" if pos["direction"] == "BUY" else "🔴"
-        pnl_sign = "+" if pos["pnl"] >= 0 else ""
-        description_lines.append(
-            f"{direction_emoji} **{pos['symbol']} {pos['direction']}**\n"
-            f"  進場: `{pos['entry_price']:.6g}` | 止損: `{pos['sl']:.6g}`\n"
-            f"  TP1: `{pos['tp1']:.6g}` | TP2: `{pos['tp2']:.6g}` | TP3: `{pos['tp3']:.6g}`\n"
-            f"  浮盈: `{pnl_sign}{pos['pnl']:.2f}%` | 開倉K棒數: `{pos['bars_open']}`\n"
-        )
-        total_pnl += pos["pnl"]
-
-    total_pnl_sign = "+" if total_pnl >= 0 else ""
-
-    return {
-        "title":       "📊 當前持倉總覽",
-        "description": "\n".join(description_lines),
-        "color":       COLOR_INFO,
-        "fields": [
-            {"name": "總浮盈", "value": f"`{total_pnl_sign}{total_pnl:.2f}%`", "inline": False},
-        ],
-        "footer":    {"text": "SATS v1.9.0  •  實時持倉"},
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-
-
-# ══════════════════════════════════════════════════
 # 訊號過濾（跳過）Embed
 # ══════════════════════════════════════════════════
 def build_skipped_embed(sig: "SignalResult", reason: str) -> dict:

@@ -311,7 +311,6 @@ class SATSEngine:
         self.symbol = symbol
         self.interval = interval
         self.cfg = cfg
-        self.signal_id: Optional[int] = None # 用於關聯資料庫中的訊號記錄
 
         # 解析 preset
         p = resolve_preset(cfg["main"]["use_preset"], interval, cfg)
@@ -321,7 +320,6 @@ class SATSEngine:
         self.rsi_len = p["rsi_len"]
         self.sl_mult = p["sl_mult"]
         self.resolved_preset = p["resolved_preset"]
-        self.price_buffer_atr_mult = cfg["risk"].get("price_buffer_atr_mult", 0.05)
 
         fc = cfg["filters"]
         tc = cfg["tqi"]
@@ -622,10 +620,6 @@ class SATSEngine:
             self._bar_index += 1
         return signal
 
-    def set_signal_id(self, signal_id: int):
-        """設定當前活躍訊號的 ID。"""
-        self.signal_id = signal_id
-
     # ── 內部計算 ─────────────────────────────────
     def _calc_tqi(self, close, er, vol_ratio, has_vol, vol_z, tc) -> float:
         use_tqi = tc["enabled"]
@@ -751,11 +745,10 @@ class SATSEngine:
           bars_open : 開倉根數
         """
         td = self._trade_dir
-        buffer = self.price_buffer_atr_mult * self._atr.value
-        tp1_reached = (high >= self._trade_tp1 - buffer) if td == 1 else (low <= self._trade_tp1 + buffer)
-        tp2_reached = (high >= self._trade_tp2 - buffer) if td == 1 else (low <= self._trade_tp2 + buffer)
-        tp3_reached = (high >= self._trade_tp3 - buffer) if td == 1 else (low <= self._trade_tp3 + buffer)
-        sl_hit      = (low  <= self._trade_sl + buffer)  if td == 1 else (high >= self._trade_sl - buffer)
+        tp1_reached = (high >= self._trade_tp1) if td == 1 else (low <= self._trade_tp1)
+        tp2_reached = (high >= self._trade_tp2) if td == 1 else (low <= self._trade_tp2)
+        tp3_reached = (high >= self._trade_tp3) if td == 1 else (low <= self._trade_tp3)
+        sl_hit      = (low  <= self._trade_sl)  if td == 1 else (high >= self._trade_sl)
 
         # 修正：計算 bars_open（進場後經過的 K 棒數）。
         # 開倉當根為 0。
@@ -774,7 +767,6 @@ class SATSEngine:
             "tp2r"      : self._trade_tp2r,
             "tp3r"      : self._trade_tp3r,
             "bars_open" : bars_open,
-            "signal_id" : self.signal_id,
         }
 
         # TP 命中里程碑（只在首次命中時發事件）
