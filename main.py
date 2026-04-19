@@ -632,9 +632,11 @@ class SATSBot:
 
         try:
             while not self._shutdown:
-                time.sleep(1)
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            await self.stop("任務被取消")
         except KeyboardInterrupt:
-            self.shutdown("鍵盤中斷 (Ctrl+C)")
+            await self.stop("鍵盤中斷 (Ctrl+C)")
 
     async def stop(self, reason: str = "手動停止"):
         if self._shutdown:
@@ -982,29 +984,32 @@ async def main():
     exchange = cfg.get("exchange", "binance")
     _load_exchange_module(exchange)
 
-    # ── 自動選取交易對 ────────────────────────────────
+    # ── 幣種選取邏輯 ──────────────────────────────────
     auto_cfg = cfg.get("auto_symbols", {})
-    cli_symbols = args.symbols                  # CLI --symbol 優先級最高
+    final_symbols = args.symbols  # 預設使用 CLI 傳入的幣種
 
-    if not cli_symbols and auto_cfg.get("enabled", False):
+    # 如果 auto_symbols 開啟，則優先執行自動抓取
+    if auto_cfg.get("enabled", False):
         top_n = int(auto_cfg.get("top_n", 100))
         quote = auto_cfg.get("quote", "USDT")
-        logger.info(f"[auto_symbols] 正在抓取成交額前 {top_n} 名 {quote} 交易對...")
+        logger.info(f"[auto_symbols] 自動選取已開啟，正在抓取成交額前 {top_n} 名 {quote} 交易對...")
         auto_syms = _fetch_top_symbols(top_n=top_n, quote=quote)
         if auto_syms:
-            logger.info(f"[auto_symbols] 成功取得 {len(auto_syms)} 個交易對")
-            cli_symbols = auto_syms
+            logger.info(f"[auto_symbols] 成功取得 {len(auto_syms)} 個交易對，將忽略手動清單")
+            final_symbols = auto_syms
         else:
-            logger.warning("[auto_symbols] 自動取得失敗，退回 config 手動清單")
+            logger.warning("[auto_symbols] 自動取得失敗，退回使用手動清單")
+    
+    # 如果既沒有自動抓取，也沒有 CLI 參數，則使用 config 中的 symbols
+    if not final_symbols:
+        final_symbols = cfg.get("symbols", [])
 
-    bot = SATSBot(cfg=cfg, symbols=cli_symbols, interval=args.interval)
+    bot = SATSBot(cfg=cfg, symbols=final_symbols, interval=args.interval)
 
-    def _sig_handler(signum, frame):
-        bot.shutdown("系統信號中斷")
-        sys.exit(0)
-
-    signal.signal(signal.SIGINT,  _sig_handler)
-    signal.signal(signal.SIGTERM, _sig_handler)
+    # 處理系統信號 (SIGINT, SIGTERM)
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, lambda: asyncio.create_task(bot.stop("系統信號中斷")))
 
     # ── --positions：預熱後立即發送持倉，然後繼續 ──
     if args.positions:
