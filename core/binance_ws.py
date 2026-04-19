@@ -137,6 +137,33 @@ def validate_symbols(symbols: List[str], interval: str) -> tuple[List[str], List
     return symbols, []
 
 def fetch_top_symbols(top_n: int, quote: str) -> List[str]:
-    # Placeholder for fetching top symbols
-    logger.warning(f"Fetching top {top_n} symbols with quote {quote} is not implemented.")
-    return []
+    """抓取幣安合約 24 小時成交額前 N 名的交易對。"""
+    try:
+        # 使用 24hr ticker 接口
+        url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        tickers = response.json()
+        
+        # 篩選符合計價幣 (quote) 且非交割合約的交易對
+        # 幣安合約格式通常是 BTCUSDT, ETHUSDC 等
+        filtered = []
+        for t in tickers:
+            symbol = t["symbol"]
+            # 確保以 quote 結尾，且成交額大於 0
+            if symbol.endswith(quote) and float(t["quoteVolume"]) > 0:
+                filtered.append({
+                    "symbol": symbol,
+                    "quoteVolume": float(t["quoteVolume"])
+                })
+        
+        # 依成交額排序 (降序)
+        filtered.sort(key=lambda x: x["quoteVolume"], reverse=True)
+        
+        # 取前 top_n 名
+        top_symbols = [x["symbol"] for x in filtered[:top_n]]
+        return top_symbols
+        
+    except Exception as e:
+        logger.error(f"Error fetching top symbols from Binance: {e}")
+        return []
